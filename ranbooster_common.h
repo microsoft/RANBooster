@@ -2,6 +2,7 @@
 #define RANBOOSTER_COMMON_H_
 
 #include <linux/if_ether.h>
+#include <stdbool.h>
 
 #define ECPRI_IQ_DATA 0x00  // eCPRI Message Type for IQ Data
 #define ECPRI_RT_CONTROL_DATA \

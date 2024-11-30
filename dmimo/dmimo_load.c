@@ -70,7 +70,7 @@ int main(int argc, char **argv) {
     }
 
     // Find the XDP program by section name (commonly ".text" or "xdp")
-    prog = bpf_object__find_program_by_name(obj, "xdp_count_and_drop");
+    prog = bpf_object__find_program_by_name(obj, "xdp_dmimo");
     if (!prog) {
         fprintf(stderr, "Failed to find XDP program in object file\n");
         bpf_object__close(obj);

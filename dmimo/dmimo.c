@@ -69,7 +69,7 @@ static __inline int bpf_memcmp(const void *s1, const void *s2, size_t n) {
 }
 
 SEC("xdp.frags")
-int xdp_count_and_drop(struct xdp_md *ctx) {
+int xdp_dmimo(struct xdp_md *ctx) {
 
     struct vlan_hdr *vlan_h = NULL;
     __u16 vlan_tci = 0;
