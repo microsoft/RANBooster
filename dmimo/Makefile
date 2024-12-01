@@ -11,22 +11,28 @@ LDFLAGS = -L/usr/lib -lbpf -lelf
 INCLUDES = -I../ -I/use/include
 
 # Targets
-BPF_OBJ = dmimo.o
+BPF_EGRESS_OBJ = dmimo_egress.o
+BPF_INGRESS_OBJ = dmimo_ingress.o
+
 USER_PROG = dmimo_load
 
 # Source files
-BPF_SRC = dmimo.c
+BPF_EGRESS_SRC = dmimo_egress.c
+BPF_INGRESS_SRC = dmimo_ingress.c
 USER_SRC = dmimo_load.c
 
 # Phony target to build all
 .PHONY: all clean
 
 # Default target: build both eBPF and user-space programs
-all: $(BPF_OBJ) $(USER_PROG)
+all: $(BPF_EGRESS_OBJ) $(BPF_INGRESS_OBJ) $(USER_PROG)
 
-# Compile the eBPF program
-$(BPF_OBJ): $(BPF_SRC)
-	$(CLANG) $(BPF_CFLAGS) $(INCLUDES) -c $(BPF_SRC) -o $(BPF_OBJ)
+# Compile the eBPF programs
+$(BPF_EGRESS_OBJ): $(BPF_EGRESS_SRC)
+	$(CLANG) $(BPF_CFLAGS) $(INCLUDES) -c $(BPF_EGRESS_SRC) -o $(BPF_EGRESS_OBJ)
+
+$(BPF_INGRESS_OBJ): $(BPF_INGRESS_SRC)
+	$(CLANG) $(BPF_CFLAGS) $(INCLUDES) -c $(BPF_INGRESS_SRC) -o $(BPF_INGRESS_OBJ)
 
 # Compile the user-space loader program
 $(USER_PROG): $(USER_SRC)
@@ -34,5 +40,5 @@ $(USER_PROG): $(USER_SRC)
 
 # Clean target to remove generated files
 clean:
-	rm -f $(BPF_OBJ) $(USER_PROG)
+	rm -f $(BPF_EGRESS_OBJ) $(BPF_INGRESS_OBJ) $(USER_PROG)
 

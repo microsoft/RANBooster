@@ -33,8 +33,8 @@ int main(int argc, char **argv) {
     uint16_t ru_vlan, du_vlan;
     uint32_t ru_port_fwd_bitmap;
 
-    if (argc != 9) {
-        fprintf(stderr, "Usage: %s <xdp_prog.o> <iface> <pin_path> <ru vlan> <ru mac> <du vlan> <du mac> <ru port bitmap>\n", argv[0]);
+    if (argc != 10) {
+        fprintf(stderr, "Usage: %s <xdp_prog.o> <iface> <pin_path> <ru vlan> <ru mac> <du vlan> <du mac> <ru port bitmap> <ranbooster_du_mac>\n", argv[0]);
         return 1;
     }
 
@@ -46,6 +46,8 @@ int main(int argc, char **argv) {
     du_vlan = atoi(argv[6]); // DU vlan
     const char *du_mac = argv[7]; // DU MAC address
     ru_port_fwd_bitmap = atoi(argv[8]); // RU port bitmap
+    const char *ranbooster_du_mac = argv[9]; // The DU MAC address configured at the RU that is controlled by the loaded program
+
 
     // Get interface index
     ifindex = if_nametoindex(iface);
@@ -142,6 +144,28 @@ int main(int argc, char **argv) {
 
     // Update the MAC address in the map
     ret = bpf_map_update_elem(bpf_map__fd(map), &key, &du_mac_addr, BPF_ANY);
+    if (ret) {
+        fprintf(stderr, "Failed to update MAC address: %s\n", strerror(errno));
+        bpf_object__close(obj);
+        return 1;
+    }
+
+
+    
+    // Find the MAC address map
+    map = bpf_object__find_map_by_name(obj, "ranbooster_du_mac_address");
+    if (!map) {
+        fprintf(stderr, "Failed to find MAC address map\n");
+        bpf_object__close(obj);
+        return 1;
+    }
+
+    // Parse the MAC address from the string
+    unsigned char ranbooster_du_mac_addr[6];
+    parse_mac_address(ranbooster_du_mac, ranbooster_du_mac_addr);
+
+    // Update the MAC address in the map
+    ret = bpf_map_update_elem(bpf_map__fd(map), &key, &ranbooster_du_mac_addr, BPF_ANY);
     if (ret) {
         fprintf(stderr, "Failed to update MAC address: %s\n", strerror(errno));
         bpf_object__close(obj);

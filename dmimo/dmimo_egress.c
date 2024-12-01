@@ -7,6 +7,10 @@
 
 #include "ranbooster_common.h"
 
+/*
+ This module handles the egress traffic, i.e., traffic going from the DU to the RUs.
+*/
+
 #define VLAN_VID_MASK    0x0FFF
 
 __u8 booster_mac_addr[] = {0xe2, 0x53, 0x8d, 0x8f, 0xa4, 0x6b};
@@ -42,6 +46,13 @@ struct {
     __type(key, __u32);              
     __type(value, __u8[ETH_ALEN]); 
 } du_mac_address SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);          
+    __type(key, __u32);              
+    __type(value, __u8[ETH_ALEN]); 
+} ranbooster_du_mac_address SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
@@ -89,6 +100,11 @@ int xdp_dmimo(struct xdp_md *ctx) {
 
     __u8 *du_mac = bpf_map_lookup_elem(&du_mac_address, &key);
     if (!du_mac) {
+	    return XDP_DROP;
+    }
+
+    __u8 *ranbooster_du_mac = bpf_map_lookup_elem(&ranbooster_du_mac_address, &key);
+    if (!ranbooster_du_mac) {
 	    return XDP_DROP;
     }
 
@@ -172,7 +188,7 @@ int xdp_dmimo(struct xdp_md *ctx) {
               if (bitmask & *port_fwd) {
                 // If this port id is handled by this XDP instance, forward to RU
                 __builtin_memcpy(eh->h_dest, ru_mac, ETH_ALEN);
-                __builtin_memcpy(eh->h_source, booster_mac_addr, ETH_ALEN);
+                __builtin_memcpy(eh->h_source, ranbooster_du_mac, ETH_ALEN);
 
                 // Change the VLAN
                 if (vlan_h) {
@@ -190,25 +206,6 @@ int xdp_dmimo(struct xdp_md *ctx) {
             } else {
                 return XDP_DROP;
             }
-        }
-    } else if (bpf_memcmp(ru_mac, eh->h_source, ETH_ALEN) == 0) {
-        // This packet is coming from the RU handled by this instance
-        // forward to the DU
-
-        if (bitmask & *port_fwd) {
-            // Change the VLAN
-            if (vlan_h) {
-                if ((void *)(vlan_h + 1) > data_end) {                    
-                    return XDP_DROP;
-                }
-                vlan_tci = (vlan_tci & 0xF000) | (*dvlan & 0x0FFF);
-                vlan_h->h_vlan_TCI = bpf_htons(vlan_tci);
-            }
-            __builtin_memcpy(eh->h_dest, du_mac, ETH_ALEN);
-            __builtin_memcpy(eh->h_source, booster_mac_addr, ETH_ALEN);
-            return XDP_TX;
-        } else {
-           return XDP_DROP;
         }
     }
     return XDP_DROP;
