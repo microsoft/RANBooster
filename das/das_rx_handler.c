@@ -15,8 +15,12 @@
 #include <sys/resource.h>
 #include <assert.h>
 #include <arpa/inet.h>
+#include <linux/netdev.h>
 
 #include "ranbooster_common.h"
+
+#include "xran_compression.h"
+#include "xran_fh_o_du.h"
 
 #define VLAN_VID_MASK    0x0FFF
 
@@ -39,6 +43,7 @@ struct xsk_pkt_fragment {
     void *data;
     bool eop;
     bool new_packet;
+    bool packet_cached;
 };
 
 struct vlan_hdr {
@@ -146,7 +151,7 @@ int setup_xsk_socket(struct xsk_socket_info *xsk_info, const char *ifname, int q
         .tx_size = XSK_RING_PROD__DEFAULT_NUM_DESCS,
         .libbpf_flags = XSK_LIBBPF_FLAGS__INHIBIT_PROG_LOAD,
         .xdp_flags = XDP_FLAGS_UPDATE_IF_NOEXIST | XDP_FLAGS_DRV_MODE,
-        .bind_flags = XDP_USE_NEED_WAKEUP | XDP_USE_SG //| XDP_ZEROCOPY, // Enable zero-copy
+        .bind_flags = XDP_USE_NEED_WAKEUP | XDP_ZEROCOPY //| XDP_USE_SG //| XDP_ZEROCOPY, // Enable zero-copy
     };
 
     //int ret = xsk_socket__create(&xsk_info->xsk, ifname, queue_id, xsk_info->umem->umem, &xsk_info->rx, &xsk_info->tx, &socket_config);
@@ -264,12 +269,18 @@ void process_rcvd_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_
     uint16_t vlan_tci = 0;
     uint16_t vlan_id = 0;
 
+    uint16_t packet_len = 0;
+    uint16_t headers_len = 0;
     for (int i = 0; i < num_frags; i++) {
+
         if (xsk->id == 1) {
             frags_to_be_freed[num_to_free++] = pkt_frags[i];
         } else {
+            packet_len += pkt_frags[i].size;
+
             // Forward those packets to the DU
             if (pkt_frags[i].new_packet) { // This is a header, so modify it
+
                 struct ethhdr *eh = (struct ethhdr *)pkt_frags[i].data;
 
                 void *next_hdr = (__u8 *)eh + sizeof(struct ethhdr);
@@ -295,10 +306,105 @@ void process_rcvd_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_
                 memcpy(eh->h_dest, du_mac_addr, ETH_ALEN);
                 memcpy(eh->h_source, booster_mac_addr, ETH_ALEN);
 
-                // struct xran_ecpri_hdr *ecpri_hdr = (struct xran_ecpri_hdr *)next_hdr;
-                // uint16_t ru_port_id = ntohs(ecpri_hdr->ecpri_xtc_id) & 0x000F;
-                // printf("The RU port id is %d\n", ru_port_id);
+                struct xran_ecpri_hdr *ecpri_hdr = (struct xran_ecpri_hdr *)next_hdr;
+                uint16_t ru_port_id = ntohs(ecpri_hdr->ecpri_xtc_id) & 0x000F;
 
+                next_hdr = (__u8 *)next_hdr + sizeof(struct xran_ecpri_hdr);
+
+                struct radio_app_common_hdr *app_common_hdr = (struct radio_app_common_hdr *)next_hdr;
+
+                struct radio_app_common_hdr radio_hdr_cpy = *app_common_hdr;
+                radio_hdr_cpy.sf_slot_sym.value = ntohs(radio_hdr_cpy.sf_slot_sym.value);
+
+                uint16_t slot = radio_hdr_cpy.sf_slot_sym.slot_id;
+                uint16_t subframe = radio_hdr_cpy.sf_slot_sym.subframe_id;
+                uint16_t symbol = radio_hdr_cpy.sf_slot_sym.symb_id;
+
+                next_hdr = (__u8 *)next_hdr + sizeof(struct radio_app_common_hdr);
+
+                struct data_section_hdr *data_sec_hdr = (struct data_section_hdr *)next_hdr;
+
+                struct data_section_hdr data_sec_hdr_cpy = *data_sec_hdr;
+                data_sec_hdr_cpy.fields.all_bits = ntohl(data_sec_hdr->fields.all_bits);
+
+                uint32_t start_prbu = data_sec_hdr_cpy.fields.start_prbu;
+                uint32_t num_prbu = data_sec_hdr_cpy.fields.num_prbu;
+
+                next_hdr = (__u8 *)next_hdr + sizeof(struct data_section_hdr);
+
+                struct data_section_compression_hdr *cmp_header = (struct data_section_compression_hdr *)next_hdr;
+
+                uint8_t iq_width = cmp_header->ud_comp_hdr.ud_iq_width;
+                uint8_t comp_method = cmp_header->ud_comp_hdr.ud_comp_meth;
+
+                headers_len = sizeof(struct ethhdr) + sizeof(struct vlan_hdr) + sizeof(struct xran_ecpri_hdr) + sizeof(struct radio_app_common_hdr) + sizeof(struct data_section_hdr) + sizeof(struct data_section_compression_hdr);
+
+
+                uint8_t iq_samples[8096] = {0};
+
+                if (ru_port_id < 4) {
+
+                    next_hdr = (__u8 *)next_hdr + sizeof(struct data_section_compression_hdr);
+
+                    struct xranlib_decompress_request dec_req = {0};
+                    dec_req.data_in = next_hdr;
+                    dec_req.numRBs = 106;
+                    dec_req.numDataElements = 24;
+                    dec_req.compMethod = XRAN_COMPMETHOD_BLKFLOAT;
+                    dec_req.iqWidth = 9;
+                    dec_req.reMask = 0xfff;
+                    dec_req.csf = 0;
+                    dec_req.ScaleFactor = 1;
+                    dec_req.len = 28 * 106;
+
+                    struct xranlib_decompress_response dec_resp = {0};
+                    dec_resp.data_out = iq_samples;
+                    dec_resp.len = 8096;
+
+                    int res = xranlib_decompress(&dec_req, &dec_resp);
+
+                    assert(res == 0);
+
+                    memset(next_hdr, 0, 28*106);
+
+                    struct xranlib_compress_request comp_req = {0};
+                    comp_req.data_in = iq_samples;
+                    comp_req.numRBs = 106;
+                    comp_req.numDataElements = 24;
+                    comp_req.compMethod = XRAN_COMPMETHOD_BLKFLOAT;
+                    comp_req.iqWidth = 9;
+                    comp_req.reMask = 0xfff;
+                    comp_req.csf = 0;
+                    comp_req.ScaleFactor = 1;
+                    comp_req.len = 8096;
+
+                    struct xranlib_compress_response comp_resp = {0};
+                    comp_resp.data_out = next_hdr;
+                    comp_resp.len = 28 * 106;
+
+                    xranlib_compress(&comp_req, &comp_resp);
+
+                }
+
+                /// For PRACH packets, it is just the headers (36 bytes) + 4 bytes per IQ sample for a total of (12PRBs * 12 REs). The total is 612
+
+                /// For data packets, each PRB has (12 * 18) bits for data + 8 bits for compression header (28 bytes). For the total of 273 PRBs, this is 7644B. By adding 36B for the header, we get 7680B. 
+
+                // Check what the exponent is
+                // if (ru_port_id < 4) {
+                //     // Get the 12th RB
+                //     next_hdr = (__u8 *)next_hdr + sizeof(struct data_section_compression_hdr) + (100 * 28); 
+
+                //     //next_hdr = (__u8 *)next_hdr + sizeof(struct data_section_compression_hdr);
+                //     struct compression_params *cp = (struct compression_params *)next_hdr;
+                //     uint8_t exponent = cp->exponent;
+                //     printf("Exponent for PRB 12 is %d\n", exponent);
+                // }
+            } 
+            if(pkt_frags[i].eop) {
+                //printf("The packet size is %d and the header length is %d\n", packet_len, headers_len);
+                headers_len = 0;
+                packet_len = 0;
             }
 
             frags_to_be_sent[num_to_send++] = pkt_frags[i];

@@ -51,6 +51,13 @@ struct {
     __type(value, __u8[ETH_ALEN]); 
 } du_mac_address SEC(".maps");
 
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);          
+    __type(key, __u32);              
+    __type(value, __u8[ETH_ALEN]); 
+} ranbooster_du_mac_address SEC(".maps");
+
 struct vlan_hdr {
     __be16 h_vlan_TCI;   /* VLAN Tag Control Information */
     __be16 h_vlan_encapsulated_proto; /* Ethernet protocol type */
@@ -70,7 +77,7 @@ static __inline int bpf_memcmp(const void *s1, const void *s2, size_t n) {
 
 int counter = 0;
 
-SEC("xdp.frags")
+SEC("xdp")
 int xdp_das(struct xdp_md *ctx) {
 
     struct vlan_hdr *vlan_h = NULL;
@@ -96,6 +103,11 @@ int xdp_das(struct xdp_md *ctx) {
 
     __u16 *dvlan = bpf_map_lookup_elem(&du_vlan, &key);
     if (!dvlan) {
+	    return XDP_DROP;
+    }
+
+    __u8 *ranbooster_du_mac = bpf_map_lookup_elem(&ranbooster_du_mac_address, &key);
+    if (!ranbooster_du_mac) {
 	    return XDP_DROP;
     }
 
@@ -148,7 +160,7 @@ int xdp_das(struct xdp_md *ctx) {
 
             // Forward this packet to the correct RU
             __builtin_memcpy(eh->h_dest, ru_mac, ETH_ALEN);
-            __builtin_memcpy(eh->h_source, booster_mac_addr, ETH_ALEN);
+            __builtin_memcpy(eh->h_source, ranbooster_du_mac, ETH_ALEN);
 
             if (vlan_h) {
                 if ((void *)(vlan_h + 1) > data_end) {                        
@@ -159,26 +171,8 @@ int xdp_das(struct xdp_md *ctx) {
             }
             return XDP_TX;
         }
-    } else if (bpf_memcmp(ru_mac, eh->h_source, ETH_ALEN) == 0) {
-        // Send the packet to the userspace application to merge it
-        // __builtin_memcpy(eh->h_dest, du_mac, ETH_ALEN);
-        // __builtin_memcpy(eh->h_source, booster_mac_addr, ETH_ALEN);
-        // return XDP_TX;
-        // if (vlan_id == 1) {
-        //     __u16 ru_port_id = bpf_ntohs(ecpri_hdr->ecpri_xtc_id) & 0x000F;
-        //     bpf_printk("The antenna is %d\n", ru_port_id);
-        // }
-
-        // if (vlan_id == 1) {
-        //     counter++;
-        //     if (counter % 1024 == 0) {
-        //         bpf_printk("Counter for vlan1 is %d\n", counter);
-        //     }
-        // }
-
-        return bpf_redirect_map(&redirect_map, 0, XDP_DROP);
     }
     return XDP_DROP;
 }
 
-char _license[] SEC("license") = "GPL";
+char _license[] SEC("license") = "MIT";
