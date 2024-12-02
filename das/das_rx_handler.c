@@ -28,6 +28,7 @@
 
 #define NUM_FRAMES_PER_SOCKET (8192)
 #define NUM_SOCKETS (2)
+#define MAX_NUM_FRAGMENTS (2)
 #define NUM_FRAMES (NUM_FRAMES_PER_SOCKET * NUM_SOCKETS)
 
 #define FRAME_SIZE (XSK_UMEM__DEFAULT_FRAME_SIZE)
@@ -36,15 +37,6 @@
 
 uint8_t booster_mac_addr[ETH_ALEN] = {0};
 uint8_t du_mac_addr[ETH_ALEN] = {0};
-
-struct xsk_pkt_fragment {
-    uint64_t addr;
-    uint32_t size;
-    void *data;
-    bool eop;
-    bool new_packet;
-    bool packet_cached;
-};
 
 struct vlan_hdr {
     __be16 h_vlan_TCI;   /* VLAN Tag Control Information */
@@ -72,7 +64,23 @@ struct xsk_socket_info {
 	uint32_t umem_frame_free;
 
     uint32_t outstanding_tx;
+
+    void *iq_buffer;
 };
+
+struct xsk_pkt_fragment {
+    uint64_t addr;
+    uint32_t size;
+    void *data;
+    bool eop;
+    bool new_packet;
+    bool packet_cached;
+
+    struct xsk_socket_info *xsk;
+};
+
+struct xsk_pkt_fragment cached_packets[NUM_SOCKETS][NUM_ANTENNA_PORTS][MAX_NUM_FRAGMENTS][NUM_SYMBOLS][NUM_SUBFRAMES][NUM_SLOTS] = {0}; 
+
 
 static void set_sched_fifo(int priority) 
 {
@@ -145,6 +153,7 @@ static uint64_t xsk_umem_free_frames(struct xsk_socket_info *xsk)
 int setup_xsk_socket(struct xsk_socket_info *xsk_info, const char *ifname, int queue_id, const char *map_name) {
 
     uint32_t idx;
+    int ret;
 
     struct xsk_socket_config socket_config = {
         .rx_size = XSK_RING_CONS__DEFAULT_NUM_DESCS,
@@ -154,8 +163,23 @@ int setup_xsk_socket(struct xsk_socket_info *xsk_info, const char *ifname, int q
         .bind_flags = XDP_USE_NEED_WAKEUP | XDP_ZEROCOPY //| XDP_USE_SG //| XDP_ZEROCOPY, // Enable zero-copy
     };
 
+    int iq_buffer_size = NUM_PRB * NUM_SUBCARRIERS_PRB * IQ_BIT_WIDTH_UNCOMPRESSED * 2;
+
+    ret = posix_memalign(&xsk_info->iq_buffer, getpagesize(), iq_buffer_size);
+    if (ret != 0) {
+        fprintf(stderr, "posix_memalign failed: %s\n", strerror(ret));
+        return EXIT_FAILURE;
+    }
+
+    // Lock the memory
+    if (mlock(xsk_info->iq_buffer, iq_buffer_size) != 0) {
+        fprintf(stderr, "mlock failed: %s\n", strerror(errno));
+        free(xsk_info->iq_buffer);
+        return EXIT_FAILURE;
+    }
+
     //int ret = xsk_socket__create(&xsk_info->xsk, ifname, queue_id, xsk_info->umem->umem, &xsk_info->rx, &xsk_info->tx, &socket_config);
-    int ret = xsk_socket__create_shared(&xsk_info->xsk, ifname, queue_id, xsk_info->umem->umem, &xsk_info->rx, &xsk_info->tx, &xsk_info->umem->fq, &xsk_info->umem->cq, &socket_config);
+    ret = xsk_socket__create_shared(&xsk_info->xsk, ifname, queue_id, xsk_info->umem->umem, &xsk_info->rx, &xsk_info->tx, &xsk_info->umem->fq, &xsk_info->umem->cq, &socket_config);
     if (ret) {
         fprintf(stderr, "Error creating XSK socket for %s: %s\n", ifname, strerror(-ret));
         return ret;
@@ -271,6 +295,7 @@ void process_rcvd_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_
 
     uint16_t packet_len = 0;
     uint16_t headers_len = 0;
+
     for (int i = 0; i < num_frags; i++) {
 
         if (xsk->id == 1) {
@@ -339,10 +364,10 @@ void process_rcvd_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_
 
                 headers_len = sizeof(struct ethhdr) + sizeof(struct vlan_hdr) + sizeof(struct xran_ecpri_hdr) + sizeof(struct radio_app_common_hdr) + sizeof(struct data_section_hdr) + sizeof(struct data_section_compression_hdr);
 
-
-                uint8_t iq_samples[8096] = {0};
+                // printf("Antenna port %d, Symbol %d, Subframe %d, slot_id %d\n", ru_port_id, symbol, subframe, slot);
 
                 if (ru_port_id < 4) {
+
 
                     next_hdr = (__u8 *)next_hdr + sizeof(struct data_section_compression_hdr);
 
@@ -358,7 +383,7 @@ void process_rcvd_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_
                     dec_req.len = 28 * 106;
 
                     struct xranlib_decompress_response dec_resp = {0};
-                    dec_resp.data_out = iq_samples;
+                    dec_resp.data_out = xsk->iq_buffer;
                     dec_resp.len = 8096;
 
                     int res = xranlib_decompress(&dec_req, &dec_resp);
@@ -368,7 +393,7 @@ void process_rcvd_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_
                     memset(next_hdr, 0, 28*106);
 
                     struct xranlib_compress_request comp_req = {0};
-                    comp_req.data_in = iq_samples;
+                    comp_req.data_in = xsk->iq_buffer;
                     comp_req.numRBs = 106;
                     comp_req.numDataElements = 24;
                     comp_req.compMethod = XRAN_COMPMETHOD_BLKFLOAT;
@@ -449,6 +474,8 @@ void rx_packets(struct xsk_socket_info *xsk)
         xsk_pkt_frags[i].addr = desc->addr;
         xsk_pkt_frags[i].size = desc->len;
         xsk_pkt_frags[i].new_packet = new_packet;
+
+        xsk_pkt_frags[i].xsk = xsk;
 
         // Mark this as a new packet or not
         new_packet = false;
@@ -576,6 +603,7 @@ int main(int argc, char **argv) {
     for (int i = 0; i < NUM_SOCKETS; i++) {
         xsk_socket__delete(xsk_info[i].xsk);
         xsk_umem__delete(umem[i].umem);
+        free(xsk_info[i].iq_buffer);
         free(umem[i].buffer);
     }    
     return 0;
