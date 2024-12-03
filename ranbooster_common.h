@@ -8,6 +8,21 @@
 #define ECPRI_RT_CONTROL_DATA \
   0x02                          // eCPRI Message Type for Real-Time Control Data
 
+#define NUM_PRB (106)
+#define NUM_SYMBOLS (14)
+#define NUM_SUBFRAMES (10)
+#define NUM_SLOTS (2)
+#define NUM_ANTENNA_PORTS (8)
+
+#define UPLINK_DIRECTION (1)
+#define DOWNLINK_DIRECTION (2)
+
+#define NUM_SUBCARRIERS_PRB (12)
+#define COMP_PARAM_HEADER_SIZE (1)
+#define IQ_BIT_WIDTH_COMPRESSED (9)
+#define IQ_BIT_WIDTH_UNCOMPRESSED (16)
+
+
 union xran_ecpri_cmn_hdr
 {
     struct
