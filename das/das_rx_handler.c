@@ -382,7 +382,7 @@ void process_rcvd_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_
 
             int num_prb = 0;
             void *iq_sum_ptr;
-            if (ru_port_id < 4) {
+            if (ru_port_id < MAX_PDSCH_PUSCH_PORT) {
                 num_prb = NUM_PRB;
                 // Use the temporary buffer of the first socket for storing the sums
                 iq_sum_ptr = cached_packets[0][ru_port_id][symbol][subframe][slot][0].xsk->iq_buffer;
@@ -394,7 +394,7 @@ void process_rcvd_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_
             for (int sock_id = 0; sock_id < NUM_SOCKETS; sock_id++) {
                 if (NUM_FRAGMENTS == 1) {
                     // If there is compression (only for RU ports < 4), decompress them
-                    if (ru_port_id < 4) {
+                    if (ru_port_id < MAX_PDSCH_PUSCH_PORT) {
                         struct xranlib_decompress_request dec_req = {0};
                         dec_req.data_in = cached_packets[sock_id][ru_port_id][symbol][subframe][slot][0].iq_ptr_head;
                         dec_req.numRBs = NUM_PRB;
@@ -423,7 +423,7 @@ void process_rcvd_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_
                         // Add the IQ samples of the new buffer
                         int16_t *iq_sum = iq_sum_ptr;
                         int16_t *iq_sum2;
-                        if (ru_port_id < 4) {
+                        if (ru_port_id < MAX_PDSCH_PUSCH_PORT) {
                             iq_sum2 = cached_packets[sock_id][ru_port_id][symbol][subframe][slot][0].xsk->iq_buffer;
                         } else {
                             iq_sum2 = cached_packets[sock_id][ru_port_id][symbol][subframe][slot][0].iq_ptr_head;
@@ -443,7 +443,7 @@ void process_rcvd_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_
             }
 
             if (NUM_FRAGMENTS == 1) {
-                if (ru_port_id < 4) {
+                if (ru_port_id < MAX_PDSCH_PUSCH_PORT) {
                     struct xranlib_compress_request comp_req = {0};
                     comp_req.data_in = iq_sum_ptr;
                     comp_req.numRBs = NUM_PRB;
