@@ -77,6 +77,8 @@ struct xsk_pkt_fragment {
 
     struct xsk_socket_info *xsk;
     void *iq_ptr_head;
+    int num_prb;
+    int ru_port_id;
 };
 
 struct xsk_pkt_fragment cached_packets[NUM_SOCKETS][NUM_ANTENNA_PORTS][NUM_SYMBOLS][NUM_SUBFRAMES][NUM_SLOTS][NUM_FRAGMENTS] = {0}; 
@@ -138,18 +140,16 @@ static uint64_t xsk_alloc_umem_frame(struct xsk_socket_info *xsk)
 	return frame;
 }
 
-static void xsk_free_umem_frame(struct xsk_socket_info *xsk, uint64_t frame)
-{
-	assert(xsk->umem_frame_free < NUM_FRAMES_PER_SOCKET);
-	xsk->umem_frame_addr[xsk->umem_frame_free++] = frame;
-}
+// static void xsk_free_umem_frame(struct xsk_socket_info *xsk, uint64_t frame)
+// {
+// 	assert(xsk->umem_frame_free < NUM_FRAMES_PER_SOCKET);
+// 	xsk->umem_frame_addr[xsk->umem_frame_free++] = frame;
+// }
 
-static uint64_t xsk_umem_free_frames(struct xsk_socket_info *xsk)
-{
-	return xsk->umem_frame_free;
-}
-
-
+// static uint64_t xsk_umem_free_frames(struct xsk_socket_info *xsk)
+// {
+// 	return xsk->umem_frame_free;
+// }
 
 // Setup an XDP socket for a given interface
 int setup_xsk_socket(struct xsk_socket_info *xsk_info, const char *ifname, int queue_id, const char *map_name) {
@@ -296,8 +296,6 @@ void process_rcvd_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_
     uint16_t vlan_tci = 0;
     uint16_t vlan_id = 0;
 
-    uint16_t headers_len = 0;
-
     // Here we assume that all the fragments of the packet follow the fragment with the header.
     // As such, we can re-use the parsed header fields to store the other fragments
     int fragment_seq = 0;
@@ -305,7 +303,6 @@ void process_rcvd_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_
     uint16_t subframe = 0;
     uint16_t symbol = 0;
     uint16_t ru_port_id = 0;
-    uint16_t num_prb;
 
     for (int i = 0; i < num_frags; i++) {
 
@@ -356,7 +353,6 @@ void process_rcvd_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_
 
             next_hdr = (__u8 *)next_hdr + sizeof(struct radio_app_common_hdr);
             struct data_section_hdr *data_sec_hdr = (struct data_section_hdr *)next_hdr;
-            num_prb = data_sec_hdr->fields.num_prbu;
 
             struct data_section_hdr data_sec_hdr_cpy = *data_sec_hdr;
             data_sec_hdr_cpy.fields.all_bits = ntohl(data_sec_hdr->fields.all_bits);
@@ -366,7 +362,8 @@ void process_rcvd_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_
             struct data_section_compression_hdr *cmp_header = (struct data_section_compression_hdr *)next_hdr;
 
             pkt_frags[i].iq_ptr_head = (__u8 *)next_hdr + sizeof(struct data_section_compression_hdr);
-
+            pkt_frags[i].num_prb = data_sec_hdr_cpy.fields.num_prbu;
+            pkt_frags[i].ru_port_id = ru_port_id;
         } else {
             fragment_seq++;
         }
@@ -380,10 +377,9 @@ void process_rcvd_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_
         // Note: We do not consider losses currently
         if (cached_packets_num[ru_port_id][symbol][subframe][slot] == NUM_FRAGMENTS * NUM_SOCKETS) {
 
-            int num_prb = 0;
+            int num_prb = cached_packets[xsk->id][ru_port_id][symbol][subframe][slot][0].num_prb;
             void *iq_sum_ptr;
             if (ru_port_id < MAX_PDSCH_PUSCH_PORT) {
-                num_prb = NUM_PRB;
                 // Use the temporary buffer of the first socket for storing the sums
                 iq_sum_ptr = cached_packets[0][ru_port_id][symbol][subframe][slot][0].xsk->iq_buffer;
             } else {
@@ -397,7 +393,7 @@ void process_rcvd_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_
                     if (ru_port_id < MAX_PDSCH_PUSCH_PORT) {
                         struct xranlib_decompress_request dec_req = {0};
                         dec_req.data_in = cached_packets[sock_id][ru_port_id][symbol][subframe][slot][0].iq_ptr_head;
-                        dec_req.numRBs = NUM_PRB;
+                        dec_req.numRBs = num_prb;
                         dec_req.numDataElements = 24;
                         dec_req.compMethod = XRAN_COMPMETHOD_BLKFLOAT;
                         dec_req.iqWidth = IQ_BIT_WIDTH_COMPRESSED;
@@ -410,7 +406,7 @@ void process_rcvd_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_
 
                         struct xranlib_decompress_response dec_resp = {0};
                         dec_resp.data_out = cached_packets[sock_id][ru_port_id][symbol][subframe][slot][0].xsk->iq_buffer;
-                        dec_resp.len = NUM_PRB * ((IQ_BIT_WIDTH_UNCOMPRESSED * 2 * NUM_SUBCARRIERS_PRB) / 8);
+                        dec_resp.len = num_prb * ((IQ_BIT_WIDTH_UNCOMPRESSED * 2 * NUM_SUBCARRIERS_PRB) / 8);
 
                         //printf("The compression per PRB is %d\n",  ((IQ_BIT_WIDTH_COMPRESSED * 2 * NUM_SUBCARRIERS_PRB) / 8) + 1);
                 
@@ -429,6 +425,8 @@ void process_rcvd_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_
                             iq_sum2 = cached_packets[sock_id][ru_port_id][symbol][subframe][slot][0].iq_ptr_head;
                         }
                         int num_iq = num_prb * NUM_SUBCARRIERS_PRB * 2;
+                        #define assert__(x) for ( ; !(x) ; assert(x) )
+
                         for (int iq_idx = 0; iq_idx < num_iq; iq_idx++) {
                             iq_sum[iq_idx] += iq_sum2[iq_idx];
                         }
@@ -446,20 +444,20 @@ void process_rcvd_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_
                 if (ru_port_id < MAX_PDSCH_PUSCH_PORT) {
                     struct xranlib_compress_request comp_req = {0};
                     comp_req.data_in = iq_sum_ptr;
-                    comp_req.numRBs = NUM_PRB;
+                    comp_req.numRBs = num_prb;
                     comp_req.numDataElements = 24;
                     comp_req.compMethod = XRAN_COMPMETHOD_BLKFLOAT;
                     comp_req.iqWidth = IQ_BIT_WIDTH_COMPRESSED;
                     comp_req.reMask = 0xfff;
                     comp_req.csf = 0;
                     comp_req.ScaleFactor = 1;
-                    comp_req.len = NUM_PRB * NUM_SUBCARRIERS_PRB * IQ_BIT_WIDTH_UNCOMPRESSED * 2;;
+                    comp_req.len = num_prb * NUM_SUBCARRIERS_PRB * IQ_BIT_WIDTH_UNCOMPRESSED * 2;;
 
                     struct xranlib_compress_response comp_resp = {0};
 
                     // TODO: Error
                     comp_resp.data_out = cached_packets[0][ru_port_id][symbol][subframe][slot][0].iq_ptr_head;
-                    comp_resp.len = NUM_PRB * (((IQ_BIT_WIDTH_COMPRESSED * 2 * NUM_SUBCARRIERS_PRB) / 8) + 1);
+                    comp_resp.len = num_prb * (((IQ_BIT_WIDTH_COMPRESSED * 2 * NUM_SUBCARRIERS_PRB) / 8) + 1);
                     xranlib_compress(&comp_req, &comp_resp);
                 }
 

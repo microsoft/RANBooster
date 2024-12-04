@@ -9,7 +9,7 @@
   0x02                          // eCPRI Message Type for Real-Time Control Data
 
 #define NUM_PRB (106)
-#define MAX_PDSCH_PUSCH_PORT (3)
+#define MAX_PDSCH_PUSCH_PORT (4)
 
 #define NUM_SYMBOLS (14)
 #define NUM_SUBFRAMES (10)
