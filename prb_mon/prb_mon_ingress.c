@@ -43,6 +43,12 @@ struct {
     __type(value, __u8[ETH_ALEN]); 
 } du_mac_address_local SEC(".maps");
 
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);          
+    __type(key, __u32);              
+    __type(value, __u16); 
+} comp_load SEC(".maps");
 
 struct vlan_hdr {
     __be16 h_vlan_TCI;   /* VLAN Tag Control Information */
@@ -136,10 +142,11 @@ int xdp_prb_mon(struct xdp_md *ctx) {
     // Check if this packet is coming from the correct RU
     if (bpf_memcmp(ru_mac, eh->h_source, ETH_ALEN) == 0) {
     
-        __builtin_memcpy(eh->h_dest, du_mac, ETH_ALEN);
+        __builtin_memcpy(eh->h_dest, ranbooster_du_mac, ETH_ALEN);
         __builtin_memcpy(eh->h_source, booster_mac_addr, ETH_ALEN);
 
         // TODO: Check PRB load for UL packets
+        return XDP_TX;
     }
     return XDP_DROP;
 }
