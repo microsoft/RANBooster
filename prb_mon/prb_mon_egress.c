@@ -12,10 +12,6 @@
 */
 
 #define VLAN_VID_MASK    0x0FFF
-#define SELECTED_RU_PORT_ID 0
-#define SELECTED_SYMBOL 3
-#define MAX_NUM_RBS 273
-#define COMPRESSED_RB_SIZE_BYTES 28
 
 __u8 booster_mac_addr[] = {0xe2, 0x53, 0x8d, 0x8f, 0xa4, 0x6b};
 
@@ -52,10 +48,8 @@ struct {
 } du_mac_address_local SEC(".maps");
 
 struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 1);          
-    __type(key, __u32);              
-    __type(value, __u16); 
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 1 << 20); // 1MB ring buffer
 } comp_load SEC(".maps");
 
 struct vlan_hdr {
@@ -85,7 +79,7 @@ int xdp_prb_mon(struct xdp_md *ctx) {
     __u32 key = 0;
     __u16 symbol = 0;
     __u8 *iq_samples_head;
-    unsigned int num_prbs;
+    unsigned int num_prbs = 0;
     
     // Get a pointer to the packet's data and data_end
     void *data = (void *)(long)ctx->data;
@@ -170,7 +164,6 @@ int xdp_prb_mon(struct xdp_md *ctx) {
 
                 next_hdr = (__u8 *)next_hdr + sizeof(struct xran_ecpri_hdr);
 
-                // TODO: Get the load and forward
                 struct radio_app_common_hdr *app_common_hdr = (struct radio_app_common_hdr *)next_hdr;
 
                 if ((void *)(app_common_hdr + 1) > data_end) {
@@ -182,7 +175,7 @@ int xdp_prb_mon(struct xdp_md *ctx) {
                 radio_hdr_cpy.sf_slot_sym.value = bpf_ntohs(radio_hdr_cpy.sf_slot_sym.value);
                 symbol = radio_hdr_cpy.sf_slot_sym.symb_id;
 
-                if (symbol != SELECTED_SYMBOL) {
+                if (symbol != MONITORING_SYMBOL_EGRESS) {
                     return XDP_TX;
                 }
 
@@ -207,7 +200,10 @@ int xdp_prb_mon(struct xdp_md *ctx) {
 
                 iq_samples_head = next_hdr + sizeof(struct data_section_compression_hdr);
 
-                __u16 current_load = 0;
+                struct prb_stats_event *e = bpf_ringbuf_reserve(&comp_load, sizeof(struct prb_stats_event), 0);
+
+                if (!e)
+                    return XDP_TX;
 
                 for (int rb_id = 0; rb_id < MAX_NUM_RBS; rb_id++) {
                     
@@ -221,13 +217,16 @@ int xdp_prb_mon(struct xdp_md *ctx) {
 
                     struct compression_params *comp_params = (struct compression_params *)iq_samples_head;
 
-                    current_load += comp_params->exponent;
+                    e->total_num_prbs++;
+
+                    if (comp_params->exponent > 0) {
+                        e->num_prbs_used += 1;
+                    }
 
                     iq_samples_head += COMPRESSED_RB_SIZE_BYTES; // 28B for each RB
                 }
 
-                // Share the load
-                bpf_map_update_elem(&comp_load, &key, &current_load, 0);
+                bpf_ringbuf_submit(e, 0);
 
                 return XDP_TX;
             } else {

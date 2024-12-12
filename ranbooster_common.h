@@ -24,6 +24,19 @@
 #define IQ_BIT_WIDTH_COMPRESSED (9)
 #define IQ_BIT_WIDTH_UNCOMPRESSED (16)
 
+#define SELECTED_RU_PORT_ID (0)
+#define MAX_NUM_RBS (273)
+#define COMPRESSED_RB_SIZE_BYTES (28)
+
+#define MONITORING_SYMBOL_INGRESS (0)
+#define MONITORING_SYMBOL_EGRESS (8)
+
+
+struct prb_stats_event 
+{
+    __u32 num_prbs_used;
+    __u32 total_num_prbs;
+};
 
 union xran_ecpri_cmn_hdr
 {

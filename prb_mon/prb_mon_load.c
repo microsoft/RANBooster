@@ -25,25 +25,26 @@ void parse_mac_address(const char *mac_str, unsigned char mac_addr[6]) {
 }
 
 int main(int argc, char **argv) {
-    const char *filename, *iface, *pin_path;
+    const char *filename, *iface, *pin_path, *map_pin_path;
     struct bpf_object *obj;
     struct bpf_program *prog;
     struct bpf_map *map;
     int prog_fd, ifindex, ret;
     uint16_t vlan;
 
-    if (argc != 8) {
-        fprintf(stderr, "Usage: %s <xdp_prog.o> <iface> <pin_name> <vlan> <ru_mac> <du_mac_middlebox> <du_mac_ru>\n", argv[0]);
+    if (argc != 9) {
+        fprintf(stderr, "Usage: %s <xdp_prog.o> <iface> <pin_name> <pin_map> <vlan> <ru_mac> <du_mac_middlebox> <du_mac_ru>\n", argv[0]);
         return 1;
     }
 
     filename = argv[1];   // XDP program object file
     iface = argv[2];      // Network interface name
     pin_path = argv[3];   // Path where the program should be pinned
-    vlan = atoi(argv[4]); // vlan
-    const char *ru_mac = argv[5]; // RU MAC address
-    const char *du_mac_middlebox = argv[6]; // DU MAC address used at the DU side
-    const char *du_mac_ru = argv[7]; // The DU MAC address configured at the RU that is controlled by the loaded program
+    map_pin_path = argv[4]; // Path where the load map should be pinned
+    vlan = atoi(argv[5]); // vlan
+    const char *ru_mac = argv[6]; // RU MAC address
+    const char *du_mac_middlebox = argv[7]; // DU MAC address used at the DU side
+    const char *du_mac_ru = argv[8]; // The DU MAC address configured at the RU that is controlled by the loaded program
 
 
     // Get interface index
@@ -72,6 +73,20 @@ int main(int argc, char **argv) {
     prog = bpf_object__find_program_by_name(obj, "xdp_prb_mon");
     if (!prog) {
         fprintf(stderr, "Failed to find XDP program in object file\n");
+        bpf_object__close(obj);
+        return 1;
+    }
+
+    map = bpf_object__find_map_by_name(obj, "comp_load");
+    if (!map) {
+        fprintf(stderr, "Failed to find global variable map\n");
+        bpf_object__close(obj);
+        return 1;
+    }
+
+    ret = bpf_map__pin(map, map_pin_path);
+    if (ret) {
+        fprintf(stderr, "Failed to pin the load map: %s\n", strerror(errno));
         bpf_object__close(obj);
         return 1;
     }
