@@ -4,7 +4,7 @@ BPF_CFLAGS = -O2 -g -Wall -target bpf
 
 # Compiler and flags for the user-space program
 CC = gcc
-USER_CFLAGS = -Wall -O2
+USER_CFLAGS = -Wall -g  -O2
 
 LDFLAGS = -L/usr/lib -lbpf -lelf 
 LDFLAGS_RX_HANDLER = -L/usr/lib -L/usr/local/lib -L../ofh_comp -lofhcompress -lbpf -lelf -lxdp

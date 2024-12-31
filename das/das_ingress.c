@@ -10,8 +10,6 @@
 #define VLAN_VID_MASK    0x0FFF
 #define MAX_ENTRIES 11
 
-__u8 booster_mac_addr[] = {0xe2, 0x53, 0x8d, 0x8f, 0xa4, 0x6b};
-
 __u8 broadcast[] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 
 
@@ -57,6 +55,13 @@ struct {
     __type(key, __u32);              
     __type(value, __u8[ETH_ALEN]); 
 } ranbooster_du_mac_address SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);          
+    __type(key, __u32);              
+    __type(value, __u8[ETH_ALEN]); 
+} booster_mac SEC(".maps");
 
 struct vlan_hdr {
     __be16 h_vlan_TCI;   /* VLAN Tag Control Information */
@@ -113,6 +118,11 @@ int xdp_das(struct xdp_md *ctx) {
 
     __u16 *rvlan = bpf_map_lookup_elem(&ru_vlan, &key);
     if (!rvlan) {
+	    return XDP_DROP;
+    }
+
+    __u8 *booster_mac_addr = bpf_map_lookup_elem(&booster_mac, &key);
+    if (!booster_mac_addr) {
 	    return XDP_DROP;
     }
 

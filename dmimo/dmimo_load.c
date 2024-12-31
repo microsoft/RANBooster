@@ -41,7 +41,7 @@ int main(int argc, char **argv) {
     filename = argv[1];   // XDP program object file
     iface = argv[2];      // Network interface name
     pin_path = argv[3];   // Path where the program should be pinned
-    const char *booster_mac = argv[4]; // RU MAC address
+    const char *booster_mac = argv[4]; // Middlebox MAC address
     ru_vlan = atoi(argv[5]); // RU vlan
     const char *ru_mac = argv[6]; // RU MAC address
     du_vlan = atoi(argv[7]); // DU vlan
