@@ -14,11 +14,17 @@ ip link set dev enp75s0v3 address 00:11:22:33:0B:40
 ip link set enp75s0np0 vf 4 mac aa:bb:cc:11:22:33
 ip link set dev enp75s0v4 address aa:bb:cc:11:22:33
 
-ip link set dev enp75s0np0 mtu 9000
-ip link set dev enp75s0v0 mtu 9000
-ip link set dev enp75s0v1 mtu 9000
-ip link set dev enp75s0v2 mtu 9000
-ip link set dev enp75s0v3 mtu 9000
+#ip link set dev enp75s0np0 mtu 9000
+#ip link set dev enp75s0v0 mtu 9000
+#ip link set dev enp75s0v1 mtu 9000
+#ip link set dev enp75s0v2 mtu 9000
+#ip link set dev enp75s0v3 mtu 9000
+
+ip link set dev enp75s0np0 mtu 3300
+ip link set dev enp75s0v0 mtu 3300
+ip link set dev enp75s0v1 mtu 3300
+ip link set dev enp75s0v2 mtu 3300
+ip link set dev enp75s0v3 mtu 3300
 
 sudo ip link add link enp75s0v0 name enp75s0v0.19 type vlan id 19
 sudo ip link add link enp75s0v0 name enp75s0v0.21 type vlan id 21
@@ -42,10 +48,10 @@ ethtool -K enp75s0v1 rxvlan off txvlan off
 ethtool -K enp75s0v2 rxvlan off txvlan off
 ethtool -K enp75s0v3 rxvlan off txvlan off
 
-ethtool -K enp75s0v0 gro on tso on gso on
-ethtool -K enp75s0v1 gro on tso on gso on
-ethtool -K enp75s0v2 gro on tso on gso on
-ethtool -K enp75s0v3 gro on tso on gso on
+#ethtool -K enp75s0v0 gro on tso on gso on
+#ethtool -K enp75s0v1 gro on tso on gso on
+#ethtool -K enp75s0v2 gro on tso on gso on
+#ethtool -K enp75s0v3 gro on tso on gso on
 
 ethtool -L enp75s0v0 combined 1
 ethtool -L enp75s0v1 combined 1

@@ -83,7 +83,7 @@ static __inline int bpf_memcmp(const void *s1, const void *s2, size_t n) {
     return 0; // Return 0 if equal
 }
 
-SEC("xdp.frags")
+SEC("xdp")
 int xdp_dmimo(struct xdp_md *ctx) {
 
     struct vlan_hdr *vlan_h = NULL;
