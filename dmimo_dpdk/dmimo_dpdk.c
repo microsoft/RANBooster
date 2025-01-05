@@ -28,10 +28,10 @@ static const struct rte_eth_conf port_conf_default = {
         .mtu = ETHER_JUMBO_FRAME_SIZE,
         .max_lro_pkt_size = ETHER_JUMBO_FRAME_SIZE,
         .mq_mode = RTE_ETH_MQ_RX_NONE,
-        .offloads = RTE_ETH_RX_OFFLOAD_CHECKSUM 
+        .offloads = RTE_ETH_RX_OFFLOAD_CHECKSUM | RTE_ETH_RX_OFFLOAD_VLAN_STRIP
     },
     .txmode = {
-        .offloads = RTE_ETH_TX_OFFLOAD_MULTI_SEGS | RTE_ETH_TX_OFFLOAD_IPV4_CKSUM | RTE_ETH_TX_OFFLOAD_TCP_CKSUM | RTE_ETH_TX_OFFLOAD_UDP_CKSUM,
+        .offloads = RTE_ETH_TX_OFFLOAD_VLAN_INSERT | RTE_ETH_TX_OFFLOAD_MULTI_SEGS | RTE_ETH_TX_OFFLOAD_IPV4_CKSUM | RTE_ETH_TX_OFFLOAD_TCP_CKSUM | RTE_ETH_TX_OFFLOAD_UDP_CKSUM,
         .mq_mode = RTE_ETH_MQ_TX_NONE,
     },
 };
@@ -170,20 +170,9 @@ lcore_main(void *args)
 
             struct rte_ether_hdr *eth_hdr = rte_pktmbuf_mtod(buf, struct rte_ether_hdr *);
 
-            struct rte_vlan_hdr *vlan_h = NULL;
             struct xran_ecpri_hdr *ecpri_hdr;
-            uint16_t vlan_id = 0;
 
-            if (eth_hdr->ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_VLAN)) {
-                vlan_h = rte_pktmbuf_mtod_offset(buf, struct rte_vlan_hdr *, sizeof(struct rte_ether_hdr));
-                vlan_id = rte_be_to_cpu_16(vlan_h->vlan_tci) & VLAN_VID_MASK;
-            }
-
-            if (vlan_h) {
-                ecpri_hdr = rte_pktmbuf_mtod_offset(buf, struct xran_ecpri_hdr *, sizeof(struct rte_ether_hdr) + sizeof(struct rte_vlan_hdr));
-            } else {
-                ecpri_hdr = rte_pktmbuf_mtod_offset(buf, struct xran_ecpri_hdr *, sizeof(struct rte_ether_hdr));
-            }
+            ecpri_hdr = rte_pktmbuf_mtod_offset(buf, struct xran_ecpri_hdr *, sizeof(struct rte_ether_hdr));
             
             uint8_t ecpri_message_type = ecpri_hdr->cmnhdr.bits.ecpri_mesg_type;
             uint16_t ru_port_id = rte_be_to_cpu_16(ecpri_hdr->ecpri_xtc_id) & 0x000F;
@@ -204,10 +193,10 @@ lcore_main(void *args)
                         rte_ether_addr_copy(&config->ru_configs[0].ru_addr, &eth_hdr->dst_addr);
                         rte_ether_addr_copy(&config->ru_configs[0].ru_du_addr, &eth_hdr->src_addr);
 
-                        if (vlan_h) {
-                            uint16_t vlan_tci = rte_be_to_cpu_16(vlan_h->vlan_tci);
-                            vlan_tci = (vlan_tci & 0xF000) | (config->ru_configs[0].vlan & 0x0FFF);
-                            vlan_h->vlan_tci = rte_cpu_to_be_16(vlan_tci);
+                        if (buf->ol_flags & RTE_MBUF_F_RX_VLAN) {
+                            buf->ol_flags |= RTE_MBUF_F_TX_VLAN;
+                            buf->vlan_tci = config->ru_configs[0].vlan;
+                            
                         }
 
                         mx_tx_bufs[mx_tx_idx++] = buf;
@@ -222,11 +211,10 @@ lcore_main(void *args)
                             rte_ether_addr_copy(&config->ru_configs[i].ru_addr, &clone_eth_hdr->dst_addr);
                             rte_ether_addr_copy(&config->ru_configs[i].ru_du_addr, &clone_eth_hdr->src_addr);
 
-                            if (vlan_h) {
-                                struct rte_vlan_hdr *clone_vlan_h = rte_pktmbuf_mtod_offset(clone, struct rte_vlan_hdr *, sizeof(struct rte_ether_hdr));
-                                uint16_t vlan_tci = rte_be_to_cpu_16(clone_vlan_h->vlan_tci);
-                                vlan_tci = (vlan_tci & 0xF000) | (config->ru_configs[i].vlan & 0x0FFF);
-                                clone_vlan_h->vlan_tci = rte_cpu_to_be_16(vlan_tci);
+                            if (clone->ol_flags & RTE_MBUF_F_RX_VLAN) {
+                                clone->ol_flags |= RTE_MBUF_F_TX_VLAN;
+                                clone->vlan_tci = config->ru_configs[i].vlan;
+                            
                             }
 
                             mx_tx_bufs[mx_tx_idx++] = clone;
@@ -242,10 +230,10 @@ lcore_main(void *args)
                                 rte_ether_addr_copy(&config->ru_configs[ru_idx].ru_addr, &eth_hdr->dst_addr);
                                 rte_ether_addr_copy(&config->ru_configs[ru_idx].ru_du_addr, &eth_hdr->src_addr);
 
-                                if (vlan_h) {
-                                    uint16_t vlan_tci = rte_be_to_cpu_16(vlan_h->vlan_tci);
-                                    vlan_tci = (vlan_tci & 0xF000) | (config->ru_configs[ru_idx].vlan & 0x0FFF);
-                                    vlan_h->vlan_tci = rte_cpu_to_be_16(vlan_tci);
+                                if (buf->ol_flags & RTE_MBUF_F_RX_VLAN) {
+                                    buf->ol_flags |= RTE_MBUF_F_TX_VLAN;
+                                    buf->vlan_tci = config->ru_configs[ru_idx].vlan;
+                            
                                 }
 
                                 mx_tx_bufs[mx_tx_idx++] = buf;
@@ -295,33 +283,16 @@ lcore_main(void *args)
             nb_rx = rte_eth_rx_burst(config->ru_configs[ru_idx].nic_port_id, 0, ru_bufs, BURST_SIZE);
             ru_tx_idx = 0;
 
-            
-            // if (nb_rx > 4) {
-            //     printf("Got %d packets from RU %d\n", nb_rx, ru_idx);
-            // }
-
             for (int rx_idx = 0; rx_idx < nb_rx; rx_idx++) {
 
                 struct rte_mbuf *buf = ru_bufs[rx_idx];
 
                 struct rte_ether_hdr *eth_hdr = rte_pktmbuf_mtod(buf, struct rte_ether_hdr *);
 
-                struct rte_vlan_hdr *vlan_h = NULL;
                 struct xran_ecpri_hdr *ecpri_hdr;
-                uint16_t vlan_id;
 
-                if (eth_hdr->ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_VLAN)) {
-                    vlan_h = rte_pktmbuf_mtod_offset(buf, struct rte_vlan_hdr *, sizeof(struct rte_ether_hdr));
-                    vlan_id = rte_be_to_cpu_16(vlan_h->vlan_tci) & VLAN_VID_MASK;
-                }
-
-                if (vlan_h) {
-                    ecpri_hdr = rte_pktmbuf_mtod_offset(buf, struct xran_ecpri_hdr *, sizeof(struct rte_ether_hdr) + sizeof(struct rte_vlan_hdr));
-                } else {
-                    ecpri_hdr = rte_pktmbuf_mtod_offset(buf, struct xran_ecpri_hdr *, sizeof(struct rte_ether_hdr));
-                }
+                ecpri_hdr = rte_pktmbuf_mtod_offset(buf, struct xran_ecpri_hdr *, sizeof(struct rte_ether_hdr));
             
-                uint8_t ecpri_message_type = ecpri_hdr->cmnhdr.bits.ecpri_mesg_type;
                 uint16_t ru_port_id = rte_be_to_cpu_16(ecpri_hdr->ecpri_xtc_id) & 0x000F;
 
                 // Check if this is coming from the RU
@@ -335,10 +306,9 @@ lcore_main(void *args)
                             rte_ether_addr_copy(&config->du_addr, &eth_hdr->dst_addr);
                             rte_ether_addr_copy(&config->middlebox_addr, &eth_hdr->src_addr);
 
-                            if (vlan_h) {
-                                uint16_t vlan_tci = rte_be_to_cpu_16(vlan_h->vlan_tci);
-                                vlan_tci = (vlan_tci & 0xF000) | (config->du_vlan & 0x0FFF);
-                                vlan_h->vlan_tci = rte_cpu_to_be_16(vlan_tci);
+                            if (buf->ol_flags & RTE_MBUF_F_RX_VLAN) {
+                                buf->ol_flags |= RTE_MBUF_F_TX_VLAN;
+                                buf->vlan_tci = config->du_vlan;
                             }
 
                             ru_tx_bufs[ru_tx_idx++] = buf;

@@ -28,7 +28,3 @@ ip link set dev enp75s0v2 mtu 9600
 ethtool -K enp75s0v0 gro on tso on gso on
 ethtool -K enp75s0v1 gro on tso on gso on
 ethtool -K enp75s0v2 gro on tso on gso on
-
-ethtool -K enp75s0v0 rxvlan off txvlan off
-ethtool -K enp75s0v1 rxvlan off txvlan off
-ethtool -K enp75s0v2 rxvlan off txvlan off
