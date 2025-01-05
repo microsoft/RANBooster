@@ -44,6 +44,7 @@ struct ru_config {
     uint16_t vlan;
     uint16_t antenna_port_fwd_bitmap;
     struct rte_mempool *mbuf_pool;
+    struct rte_mempool *mbuf_pool_clone;
 };
 
 struct middlebox_config {
@@ -155,7 +156,7 @@ void check_link_status(uint16_t port_id) {
 }
 
 static inline struct rte_mbuf *
-mcast_out_pkt(struct rte_mbuf *pkt)
+mcast_out_pkt(struct rte_mbuf *pkt, struct rte_mempool *pool)
 {
         struct rte_mbuf *hdr;
 
@@ -166,7 +167,7 @@ mcast_out_pkt(struct rte_mbuf *pkt)
         //         return NULL;
 
         /* If requested, then make a new clone packet. */
-        if ((pkt = rte_pktmbuf_clone(pkt, pkt->pool)) == NULL) {
+        if ((pkt = rte_pktmbuf_clone(pkt, pool)) == NULL) {
                 rte_pktmbuf_free(hdr);
                 return NULL;
         }
@@ -223,7 +224,7 @@ lcore_main(void *args)
 
                         // Send the control data to all the RUs
                         for (int i = 1; i < config->num_rus; i++) {
-                            struct rte_mbuf *clone = mcast_out_pkt(buf);
+                            struct rte_mbuf *clone = mcast_out_pkt(buf, config->ru_configs[i].mbuf_pool_clone);
                             assert(clone != NULL);
 
                             struct rte_ether_hdr *ethdr;
@@ -242,14 +243,9 @@ lcore_main(void *args)
                             mx_tx_bufs[mx_tx_idx++] = clone;
                         }
 
-                        
                         struct rte_ether_hdr *ethdr;
 
-                        struct rte_mbuf *clone = mcast_out_pkt(buf);
-
-                        assert(clone != NULL);
-
-                        ethdr = (struct rte_ether_hdr *)rte_pktmbuf_prepend(clone, (uint16_t)sizeof(*ethdr));
+                        ethdr = (struct rte_ether_hdr *)rte_pktmbuf_prepend(buf, (uint16_t)sizeof(*ethdr));
 
                         rte_ether_addr_copy(&config->ru_configs[0].ru_addr, &ethdr->dst_addr);
                         rte_ether_addr_copy(&config->ru_configs[0].ru_du_addr, &ethdr->src_addr);
@@ -257,13 +253,11 @@ lcore_main(void *args)
                         ethdr->ether_type = rte_be_to_cpu_16(RTE_ETHER_TYPE_ECPRI);
 
                         if (buf->ol_flags & RTE_MBUF_F_RX_VLAN) {
-                            clone->ol_flags |= RTE_MBUF_F_TX_VLAN;
-                            clone->vlan_tci = config->ru_configs[0].vlan;
+                            buf->ol_flags |= RTE_MBUF_F_TX_VLAN;
+                            buf->vlan_tci = config->ru_configs[0].vlan;
                         }
 
-                        mx_tx_bufs[mx_tx_idx++] = clone;
-
-                        rte_pktmbuf_free(buf);
+                        mx_tx_bufs[mx_tx_idx++] = buf;
 
                     } else if (ecpri_message_type == ECPRI_IQ_DATA) {
 
@@ -462,10 +456,18 @@ main(int argc, char *argv[]) {
 
     for (int i = 0; i < config.num_rus; i++) {
         char pool_name[32];
+        char pool_name_clone[32];
         snprintf(pool_name, sizeof(pool_name), "RU_POOL_%d", i);
+        snprintf(pool_name_clone, sizeof(pool_name), "RU_POOL_%d_clone", i);
         config.ru_configs[i].mbuf_pool = rte_pktmbuf_pool_create(pool_name, NUM_MBUFS,
             MBUF_CACHE_SIZE, 0, ETHER_JUMBO_FRAME_SIZE + RTE_PKTMBUF_HEADROOM + 100, SOCKET_ID_ANY);
         if (config.ru_configs[i].mbuf_pool == NULL) {
+            rte_exit(EXIT_FAILURE, "Cannot create mbuf pool %s\n", pool_name);
+        }
+
+        config.ru_configs[i].mbuf_pool_clone = rte_pktmbuf_pool_create(pool_name_clone, NUM_MBUFS,
+            MBUF_CACHE_SIZE, 0, 2 * RTE_PKTMBUF_HEADROOM + 100, SOCKET_ID_ANY);
+        if (config.ru_configs[i].mbuf_pool_clone == NULL) {
             rte_exit(EXIT_FAILURE, "Cannot create mbuf pool %s\n", pool_name);
         }
             
