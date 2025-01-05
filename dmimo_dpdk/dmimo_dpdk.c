@@ -154,6 +154,34 @@ void check_link_status(uint16_t port_id) {
     }
 }
 
+static inline struct rte_mbuf *
+mcast_out_pkt(struct rte_mbuf *pkt)
+{
+        struct rte_mbuf *hdr;
+
+        /* Create new mbuf for the header. */
+        hdr = rte_pktmbuf_alloc(pkt->pool);
+        assert(hdr != NULL);
+        // if ((hdr = rte_pktmbuf_alloc(pkt->pool)) == NULL)
+        //         return NULL;
+
+        /* If requested, then make a new clone packet. */
+        if ((pkt = rte_pktmbuf_clone(pkt, pkt->pool)) == NULL) {
+                rte_pktmbuf_free(hdr);
+                return NULL;
+        }
+
+        /* prepend new header */
+        hdr->next = pkt;
+
+        /* update header's fields */
+        hdr->pkt_len = (uint16_t)(hdr->data_len + pkt->pkt_len);
+        hdr->nb_segs = pkt->nb_segs + 1;
+
+        __rte_mbuf_sanity_check(hdr, 1);
+        return hdr;
+}
+
 int
 lcore_main(void *args) 
 {
@@ -172,8 +200,8 @@ lcore_main(void *args)
 
             struct xran_ecpri_hdr *ecpri_hdr;
 
-            ecpri_hdr = rte_pktmbuf_mtod_offset(buf, struct xran_ecpri_hdr *, sizeof(struct rte_ether_hdr));
-            
+            ecpri_hdr = rte_pktmbuf_mtod_offset(buf, struct xran_ecpri_hdr *, sizeof(struct rte_ether_hdr)); 
+
             uint8_t ecpri_message_type = ecpri_hdr->cmnhdr.bits.ecpri_mesg_type;
             uint16_t ru_port_id = rte_be_to_cpu_16(ecpri_hdr->ecpri_xtc_id) & 0x000F;
 
@@ -190,36 +218,52 @@ lcore_main(void *args)
 
                         //printf("Received control data\n");
 
-                        rte_ether_addr_copy(&config->ru_configs[0].ru_addr, &eth_hdr->dst_addr);
-                        rte_ether_addr_copy(&config->ru_configs[0].ru_du_addr, &eth_hdr->src_addr);
-
-                        if (buf->ol_flags & RTE_MBUF_F_RX_VLAN) {
-                            buf->ol_flags |= RTE_MBUF_F_TX_VLAN;
-                            buf->vlan_tci = config->ru_configs[0].vlan;
-                            
-                        }
-
-                        mx_tx_bufs[mx_tx_idx++] = buf;
+                        rte_pktmbuf_adj(buf, (uint16_t)sizeof(struct rte_ether_hdr));
     
+
                         // Send the control data to all the RUs
                         for (int i = 1; i < config->num_rus; i++) {
-                            struct rte_mbuf *clone = rte_pktmbuf_copy(buf, buf->pool, 0, buf->pkt_len);
+                            struct rte_mbuf *clone = mcast_out_pkt(buf);
                             assert(clone != NULL);
 
-                            struct rte_ether_hdr *clone_eth_hdr = rte_pktmbuf_mtod(clone, struct rte_ether_hdr *);
+                            struct rte_ether_hdr *ethdr;
 
-                            rte_ether_addr_copy(&config->ru_configs[i].ru_addr, &clone_eth_hdr->dst_addr);
-                            rte_ether_addr_copy(&config->ru_configs[i].ru_du_addr, &clone_eth_hdr->src_addr);
+                            ethdr = (struct rte_ether_hdr *)rte_pktmbuf_prepend(clone, (uint16_t)sizeof(*ethdr));
 
-                            if (clone->ol_flags & RTE_MBUF_F_RX_VLAN) {
+                            rte_ether_addr_copy(&config->ru_configs[i].ru_addr, &ethdr->dst_addr);
+                            rte_ether_addr_copy(&config->ru_configs[i].ru_du_addr, &ethdr->src_addr);
+                            ethdr->ether_type = rte_be_to_cpu_16(RTE_ETHER_TYPE_ECPRI);
+
+                            if (buf->ol_flags & RTE_MBUF_F_RX_VLAN) {
                                 clone->ol_flags |= RTE_MBUF_F_TX_VLAN;
                                 clone->vlan_tci = config->ru_configs[i].vlan;
-                            
                             }
 
                             mx_tx_bufs[mx_tx_idx++] = clone;
-
                         }
+
+                        
+                        struct rte_ether_hdr *ethdr;
+
+                        struct rte_mbuf *clone = mcast_out_pkt(buf);
+
+                        assert(clone != NULL);
+
+                        ethdr = (struct rte_ether_hdr *)rte_pktmbuf_prepend(clone, (uint16_t)sizeof(*ethdr));
+
+                        rte_ether_addr_copy(&config->ru_configs[0].ru_addr, &ethdr->dst_addr);
+                        rte_ether_addr_copy(&config->ru_configs[0].ru_du_addr, &ethdr->src_addr);
+
+                        ethdr->ether_type = rte_be_to_cpu_16(RTE_ETHER_TYPE_ECPRI);
+
+                        if (buf->ol_flags & RTE_MBUF_F_RX_VLAN) {
+                            clone->ol_flags |= RTE_MBUF_F_TX_VLAN;
+                            clone->vlan_tci = config->ru_configs[0].vlan;
+                        }
+
+                        mx_tx_bufs[mx_tx_idx++] = clone;
+
+                        rte_pktmbuf_free(buf);
 
                     } else if (ecpri_message_type == ECPRI_IQ_DATA) {
 
@@ -241,7 +285,6 @@ lcore_main(void *args)
                             }
                         }
                     } else {
-                        assert(false);
                         rte_pktmbuf_free(buf);
                         continue;
                     }
