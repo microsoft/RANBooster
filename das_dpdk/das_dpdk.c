@@ -20,7 +20,7 @@
 #define MBUF_CACHE_SIZE 32
 #define BURST_SIZE 32
 
-#define MAX_NUM_RUS 2
+#define MAX_NUM_RUS 3
 
 #define VLAN_VID_MASK    0x0FFF
 #define ETHER_JUMBO_FRAME_SIZE 8600
@@ -449,7 +449,7 @@ lcore_main(void *args)
                                 buf_out->vlan_tci = config->du_vlan;
                             }
 
-                            for (int idx = 1; idx < MAX_NUM_RUS; idx++) {
+                            for (int idx = 1; idx < config->num_rus; idx++) {
                                 if (num_to_free[idx] > 0) {
                                     rte_pktmbuf_free(bufs_to_be_freed[idx]);
                                 }
@@ -480,10 +480,12 @@ lcore_main(void *args)
 
 int
 main(int argc, char *argv[]) {
-    const char *mb_pci_addr_str, *ru1_du_pci_addr_str, *ru2_du_pci_addr_str;
-    struct rte_ether_addr ru1_addr, ru2_addr, du_addr;
-    uint16_t ru1_vlan, ru2_vlan, du_vlan;
+    const char *mb_pci_addr_str;
+    const char *ru_du_pci_addr_str;
+    struct rte_ether_addr du_addr, ru_addr;
+    uint16_t ru_vlan, du_vlan;
     struct middlebox_config config;
+    int num_rus;
 
     int eal_argc = rte_eal_init(argc, argv);
 
@@ -494,36 +496,21 @@ main(int argc, char *argv[]) {
 
 
     // TODO
-    if (argc < 3) {
-        rte_exit(EXIT_FAILURE, "Usage: %s <PCI_ADDR> <SRC_MAC> <DST_MAC>\n", argv[0]);
+    if (argc < 10) {
+        rte_exit(EXIT_FAILURE, "Usage: %s ...\n", argv[0]);
     }
 
+    num_rus = (argc - 3) / 3;
+    config.num_rus = num_rus;
+
+    printf("The num of RUs is %d\n", num_rus);
+
     mb_pci_addr_str = argv[1];
-    ru1_du_pci_addr_str = argv[2];
-    ru1_vlan = atoi(argv[3]);
-    parse_mac_address(argv[4], &ru1_addr);
-    printf("RU1 MAC address: %s\n", argv[4]);
-    ru2_du_pci_addr_str = argv[5];
-    ru2_vlan = atoi(argv[6]);
-    parse_mac_address(argv[7], &ru2_addr);
-    printf("RU2 MAC address: %s\n", argv[7]);
-    parse_mac_address(argv[8], &du_addr);
-    du_vlan = atoi(argv[9]);
+    parse_mac_address(argv[2], &du_addr);
+    du_vlan = atoi(argv[3]);
 
     get_port_from_pci(mb_pci_addr_str, &config.nic_port_id);
     rte_eth_macaddr_get(config.nic_port_id, &config.middlebox_addr);
-
-    config.num_rus = MAX_NUM_RUS;
-
-    get_port_from_pci(ru1_du_pci_addr_str, &config.ru_configs[0].nic_port_id);
-    rte_eth_macaddr_get(config.ru_configs[0].nic_port_id, &config.ru_configs[0].ru_du_addr);
-    config.ru_configs[0].vlan = ru1_vlan;
-    config.ru_configs[0].ru_addr = ru1_addr;
-
-    get_port_from_pci(ru2_du_pci_addr_str, &config.ru_configs[1].nic_port_id);
-    rte_eth_macaddr_get(config.ru_configs[1].nic_port_id, &config.ru_configs[1].ru_du_addr);
-    config.ru_configs[1].vlan = ru2_vlan;
-    config.ru_configs[1].ru_addr = ru2_addr;
 
     config.du_addr = du_addr;
     config.du_vlan = du_vlan;
@@ -541,32 +528,45 @@ main(int argc, char *argv[]) {
 
     check_link_status(config.nic_port_id);  
 
-    for (int i = 0; i < config.num_rus; i++) {
+    int ru_idx = 0;
+    for (int arg_idx = 4; arg_idx < argc; arg_idx += 3) {
+        ru_du_pci_addr_str = argv[arg_idx];
+        ru_vlan = atoi(argv[arg_idx + 1]);
+        memset(&ru_addr, 0, sizeof(ru_addr));
+        parse_mac_address(argv[arg_idx + 2], &ru_addr);
+        printf("RU %d MAC address: %s\n", ru_idx + 1, argv[arg_idx + 2]);
+
+        get_port_from_pci(ru_du_pci_addr_str, &config.ru_configs[ru_idx].nic_port_id);
+        rte_eth_macaddr_get(config.ru_configs[ru_idx].nic_port_id, &config.ru_configs[ru_idx].ru_du_addr);
+        config.ru_configs[ru_idx].vlan = ru_vlan;
+        config.ru_configs[ru_idx].ru_addr = ru_addr;
+
         char pool_name[32];
         char pool_name_clone[32];
-        snprintf(pool_name, sizeof(pool_name), "RU_POOL_%d", i);
-        snprintf(pool_name_clone, sizeof(pool_name), "RU_POOL_%d_clone", i);
-        config.ru_configs[i].mbuf_pool = rte_pktmbuf_pool_create(pool_name, NUM_MBUFS,
+        snprintf(pool_name, sizeof(pool_name), "RU_POOL_%d", ru_idx);
+        snprintf(pool_name_clone, sizeof(pool_name), "RU_POOL_%d_clone", ru_idx);
+        config.ru_configs[ru_idx].mbuf_pool = rte_pktmbuf_pool_create(pool_name, NUM_MBUFS,
             MBUF_CACHE_SIZE, 0, ETHER_JUMBO_FRAME_SIZE + RTE_PKTMBUF_HEADROOM + 100, SOCKET_ID_ANY);
-        if (config.ru_configs[i].mbuf_pool == NULL) {
+        if (config.ru_configs[ru_idx].mbuf_pool == NULL) {
             rte_exit(EXIT_FAILURE, "Cannot create mbuf pool %s\n", pool_name);
         }
 
-        config.ru_configs[i].mbuf_pool_clone = rte_pktmbuf_pool_create(pool_name_clone, NUM_MBUFS,
+        config.ru_configs[ru_idx].mbuf_pool_clone = rte_pktmbuf_pool_create(pool_name_clone, NUM_MBUFS,
             MBUF_CACHE_SIZE, 0, 2 * RTE_PKTMBUF_HEADROOM + 100, SOCKET_ID_ANY);
-        if (config.ru_configs[i].mbuf_pool_clone == NULL) {
+        if (config.ru_configs[ru_idx].mbuf_pool_clone == NULL) {
             rte_exit(EXIT_FAILURE, "Cannot create mbuf pool %s\n", pool_name);
         }
             
 
-        if (port_init(config.ru_configs[i].nic_port_id, config.ru_configs[i].mbuf_pool) != 0)
-            rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu16 "\n", config.ru_configs[i].nic_port_id);
+        if (port_init(config.ru_configs[ru_idx].nic_port_id, config.ru_configs[ru_idx].mbuf_pool) != 0)
+            rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu16 "\n", config.ru_configs[ru_idx].nic_port_id);
 
-        printf("Initialized port %d for RU%d\n", config.ru_configs[i].nic_port_id, i+1);
-        print_mac_address_from_portid(config.ru_configs[i].nic_port_id);
+        printf("Initialized port %d for RU%d\n", config.ru_configs[ru_idx].nic_port_id, ru_idx+1);
+        print_mac_address_from_portid(config.ru_configs[ru_idx].nic_port_id);
 
-        check_link_status(config.ru_configs[i].nic_port_id);  
+        check_link_status(config.ru_configs[ru_idx].nic_port_id);  
 
+        ru_idx++;
     }
 
     if (rte_lcore_count() > 1)
