@@ -9,6 +9,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <immintrin.h>
+
 #include "ranbooster_common.h"
 #include "xran_compression.h"
 #include "xran_fh_o_du.h"
@@ -20,7 +22,7 @@
 #define MBUF_CACHE_SIZE 32
 #define BURST_SIZE 32
 
-#define MAX_NUM_RUS 3
+#define MAX_NUM_RUS 4
 
 #define VLAN_VID_MASK    0x0FFF
 #define ETHER_JUMBO_FRAME_SIZE 8600
@@ -143,7 +145,7 @@ print_mac_address_from_portid(uint16_t port) {
            mac_addr.addr_bytes[5]);
 }
 
-static void
+__attribute__((unused)) static void
 print_mac_address(struct rte_ether_addr mac_addr) {
     printf("MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
            mac_addr.addr_bytes[0],
@@ -193,6 +195,29 @@ mcast_out_pkt(struct rte_mbuf *pkt, struct rte_mempool *pool)
         __rte_mbuf_sanity_check(hdr, 1);
         return hdr;
 }
+
+#if defined(__AVX512F__)
+#pragma message "Using AVX512"
+void sum_arrays_avx512(int16_t *iq_sum, int16_t *iq_sum2, int num_iq) {
+    int iq_idx;
+    for (iq_idx = 0; iq_idx <= num_iq - 32; iq_idx += 32) {
+        // Load 32 int16_t values from each array
+        __m512i vec1 = _mm512_loadu_si512((__m512i *)&iq_sum[iq_idx]);
+        __m512i vec2 = _mm512_loadu_si512((__m512i *)&iq_sum2[iq_idx]);
+
+        // Add the vectors
+        __m512i result = _mm512_add_epi16(vec1, vec2);
+
+        // Store the result back to iq_sum
+        _mm512_storeu_si512((__m512i *)&iq_sum[iq_idx], result);
+    }
+
+    // Handle any remaining elements
+    for (; iq_idx < num_iq; iq_idx++) {
+        iq_sum[iq_idx] += iq_sum2[iq_idx];
+    }
+}
+#endif
 
 int
 lcore_main(void *args) 
@@ -404,10 +429,14 @@ lcore_main(void *args)
                                             sizeof(struct data_section_hdr) + sizeof(struct data_section_compression_hdr));
                                     }
                                     int num_iq = num_prbs * NUM_SUBCARRIERS_PRB * 2;
-                                    #define assert__(x) for ( ; !(x) ; assert(x) )
+                                    #define assert__(x) for ( ; !(x) ; assert(x) )                          
+#if defined(__AVX512F__)
+                                    sum_arrays_avx512(iq_sum, iq_sum2, num_iq);
+#else
                                     for (int iq_idx = 0; iq_idx < num_iq; iq_idx++) {
                                         iq_sum[iq_idx] += iq_sum2[iq_idx];
                                     }
+#endif
                                     bufs_to_be_freed[id] = cached_packets[id][ru_port_id][symbol][subframe][slot];
                                     num_to_free[id]++;
                                 }
