@@ -220,289 +220,337 @@ void sum_arrays_avx512(int16_t *iq_sum, int16_t *iq_sum2, int num_iq) {
 #endif
 
 int
-lcore_main(void *args) 
+ranbooster_handle_tx(void *args)
 {
     struct middlebox_config *config = (struct middlebox_config *)args;
 
-    while (true) {
-        struct rte_mbuf *mx_bufs[BURST_SIZE];
-        struct rte_mbuf *mx_tx_bufs[128];
-        uint16_t mx_tx_idx = 0;
-        uint16_t nb_rx = rte_eth_rx_burst(config->nic_port_id, 0, mx_bufs, BURST_SIZE);
+    struct rte_mbuf *mx_bufs[BURST_SIZE];
+    struct rte_mbuf *mx_tx_bufs[128];
+    
+    uint16_t mx_tx_idx = 0;
+    uint16_t nb_rx = rte_eth_rx_burst(config->nic_port_id, 0, mx_bufs, BURST_SIZE);
 
-        for (int rx_idx = 0; rx_idx < nb_rx; rx_idx++) {
-            struct rte_mbuf *buf = mx_bufs[rx_idx];
+    for (int rx_idx = 0; rx_idx < nb_rx; rx_idx++) {
+    
+        struct rte_mbuf *buf = mx_bufs[rx_idx];
+        struct rte_ether_hdr *eth_hdr = rte_pktmbuf_mtod(buf, struct rte_ether_hdr *);
 
-            struct rte_ether_hdr *eth_hdr = rte_pktmbuf_mtod(buf, struct rte_ether_hdr *);
+        struct xran_ecpri_hdr *ecpri_hdr;
 
-            struct xran_ecpri_hdr *ecpri_hdr;
+        ecpri_hdr = rte_pktmbuf_mtod_offset(buf, struct xran_ecpri_hdr *, sizeof(struct rte_ether_hdr)); 
 
-            ecpri_hdr = rte_pktmbuf_mtod_offset(buf, struct xran_ecpri_hdr *, sizeof(struct rte_ether_hdr)); 
+        uint8_t ecpri_message_type = ecpri_hdr->cmnhdr.bits.ecpri_mesg_type;
 
-            uint8_t ecpri_message_type = ecpri_hdr->cmnhdr.bits.ecpri_mesg_type;
+        // Check if this is coming from the DU
+        if (rte_is_same_ether_addr(&config->du_addr, &eth_hdr->src_addr)) {
 
-            // Check if this is coming from the DU
-            if (rte_is_same_ether_addr(&config->du_addr, &eth_hdr->src_addr)) {
+            // Check if this was going to the middlebox
+            if (rte_is_same_ether_addr(&config->middlebox_addr, &eth_hdr->dst_addr)) {
 
-                // Check if this was going to the middlebox
-                if (rte_is_same_ether_addr(&config->middlebox_addr, &eth_hdr->dst_addr)) {
+                if (ecpri_message_type == ECPRI_RT_CONTROL_DATA || ecpri_message_type == ECPRI_IQ_DATA) {
 
-                    if (ecpri_message_type == ECPRI_RT_CONTROL_DATA || ecpri_message_type == ECPRI_IQ_DATA) {
+                    rte_pktmbuf_adj(buf, (uint16_t)sizeof(struct rte_ether_hdr));
 
-                        rte_pktmbuf_adj(buf, (uint16_t)sizeof(struct rte_ether_hdr));
-
-                        // Send to all the RUs
-                        for (int i = 1; i < config->num_rus; i++) {
-                            struct rte_mbuf *clone = mcast_out_pkt(buf, config->ru_configs[i].mbuf_pool_clone);
-                            assert(clone != NULL);
-
-                            struct rte_ether_hdr *ethdr;
-
-                            ethdr = (struct rte_ether_hdr *)rte_pktmbuf_prepend(clone, (uint16_t)sizeof(*ethdr));
-
-                            rte_ether_addr_copy(&config->ru_configs[i].ru_addr, &ethdr->dst_addr);
-                            rte_ether_addr_copy(&config->ru_configs[i].ru_du_addr, &ethdr->src_addr);
-                            ethdr->ether_type = rte_be_to_cpu_16(RTE_ETHER_TYPE_ECPRI);
-
-                            if (buf->ol_flags & RTE_MBUF_F_RX_VLAN) {
-                                clone->ol_flags |= RTE_MBUF_F_TX_VLAN;
-                                clone->vlan_tci = config->ru_configs[i].vlan;
-                            }
-
-                            mx_tx_bufs[mx_tx_idx++] = clone;
-                        }
+                    // Send to all the RUs
+                    for (int i = 1; i < config->num_rus; i++) {
+                        struct rte_mbuf *clone = mcast_out_pkt(buf, config->ru_configs[i].mbuf_pool_clone);
+                        assert(clone != NULL);
 
                         struct rte_ether_hdr *ethdr;
+                        ethdr = (struct rte_ether_hdr *)rte_pktmbuf_prepend(clone, (uint16_t)sizeof(*ethdr));
 
-                        ethdr = (struct rte_ether_hdr *)rte_pktmbuf_prepend(buf, (uint16_t)sizeof(*ethdr));
-
-                        rte_ether_addr_copy(&config->ru_configs[0].ru_addr, &ethdr->dst_addr);
-                        rte_ether_addr_copy(&config->ru_configs[0].ru_du_addr, &ethdr->src_addr);
-
+                        rte_ether_addr_copy(&config->ru_configs[i].ru_addr, &ethdr->dst_addr);
+                        rte_ether_addr_copy(&config->ru_configs[i].ru_du_addr, &ethdr->src_addr);
                         ethdr->ether_type = rte_be_to_cpu_16(RTE_ETHER_TYPE_ECPRI);
 
                         if (buf->ol_flags & RTE_MBUF_F_RX_VLAN) {
-                            buf->ol_flags |= RTE_MBUF_F_TX_VLAN;
-                            buf->vlan_tci = config->ru_configs[0].vlan;
+                            clone->ol_flags |= RTE_MBUF_F_TX_VLAN;
+                            clone->vlan_tci = config->ru_configs[i].vlan;
                         }
 
-                        mx_tx_bufs[mx_tx_idx++] = buf;
-
-                    } else {
-                        rte_pktmbuf_free(buf);
-                        continue;
+                        mx_tx_bufs[mx_tx_idx++] = clone;
                     }
 
-                } else { // If this was not going to the middlebox, ignore it
+                    struct rte_ether_hdr *ethdr;
+
+                    ethdr = (struct rte_ether_hdr *)rte_pktmbuf_prepend(buf, (uint16_t)sizeof(*ethdr));
+
+                    rte_ether_addr_copy(&config->ru_configs[0].ru_addr, &ethdr->dst_addr);
+                    rte_ether_addr_copy(&config->ru_configs[0].ru_du_addr, &ethdr->src_addr);
+
+                    ethdr->ether_type = rte_be_to_cpu_16(RTE_ETHER_TYPE_ECPRI);
+
+                    if (buf->ol_flags & RTE_MBUF_F_RX_VLAN) {
+                        buf->ol_flags |= RTE_MBUF_F_TX_VLAN;
+                        buf->vlan_tci = config->ru_configs[0].vlan;
+                    }
+
+                    mx_tx_bufs[mx_tx_idx++] = buf;
+
+                } else {
                     rte_pktmbuf_free(buf);
                     continue;
                 }
 
-            } else { // If this is not coming from the DU, ignore it
+            } else { // If this was not going to the middlebox, ignore it
                 rte_pktmbuf_free(buf);
                 continue;
             }
 
+        } else { // If this is not coming from the DU, ignore it
+            rte_pktmbuf_free(buf);
+            continue;
         }
 
-        if (mx_tx_idx > 0) {
-            uint16_t nb_tx = rte_eth_tx_burst(config->nic_port_id, 0, mx_tx_bufs, mx_tx_idx);
-            assert(nb_tx == mx_tx_idx);
-            if (unlikely(nb_tx < mx_tx_idx)) {
-                for (int i = nb_tx; i < mx_tx_idx; i++) {
-                    rte_pktmbuf_free(mx_tx_bufs[i]);
-                }
+    }
+
+    if (mx_tx_idx > 0) {
+        uint16_t nb_tx = rte_eth_tx_burst(config->nic_port_id, 0, mx_tx_bufs, mx_tx_idx);
+
+        if (nb_tx != mx_tx_idx) {
+            printf("I was supposed to send %d, but I sent %d\n", mx_tx_idx, nb_tx);
+        }
+        assert(nb_tx == mx_tx_idx);
+        if (unlikely(nb_tx < mx_tx_idx)) {
+            for (int i = nb_tx; i < mx_tx_idx; i++) {
+                rte_pktmbuf_free(mx_tx_bufs[i]);
             }
         }
+    }
 
-        // We now check the RUs
-        for (int ru_idx = 0; ru_idx < config->num_rus; ru_idx++) {
+    return 0;
+}
 
-            struct rte_mbuf *ru_bufs[BURST_SIZE];
-            struct rte_mbuf *ru_tx_bufs[128];
-            uint16_t ru_tx_idx = 0;
+int
+ranbooster_handle_rx(void *args)
+{
+    struct middlebox_config *config = (struct middlebox_config *)args;
 
-            nb_rx = rte_eth_rx_burst(config->ru_configs[ru_idx].nic_port_id, 0, ru_bufs, BURST_SIZE);
+    // We now check the RUs
+    for (int ru_idx = 0; ru_idx < config->num_rus; ru_idx++) {
 
-            for (int rx_idx = 0; rx_idx < nb_rx; rx_idx++) {
+        struct rte_mbuf *ru_bufs[BURST_SIZE];
+        struct rte_mbuf *ru_tx_bufs[128];
+        uint16_t ru_tx_idx = 0;
+        uint16_t nb_rx = 0;
 
-                struct rte_mbuf *buf = ru_bufs[rx_idx];
+        nb_rx = rte_eth_rx_burst(config->ru_configs[ru_idx].nic_port_id, 0, ru_bufs, BURST_SIZE);
 
-                struct rte_ether_hdr *eth_hdr = rte_pktmbuf_mtod(buf, struct rte_ether_hdr *);
+        for (int rx_idx = 0; rx_idx < nb_rx; rx_idx++) {
 
-                // Check if this is coming from the RU
-                if (rte_is_same_ether_addr(&config->ru_configs[ru_idx].ru_addr, &eth_hdr->src_addr)) {
+            struct rte_mbuf *buf = ru_bufs[rx_idx];
 
-                    // Check if this was going to the middlebox
-                    if (rte_is_same_ether_addr(&config->ru_configs[ru_idx].ru_du_addr, &eth_hdr->dst_addr)) {
+            struct rte_ether_hdr *eth_hdr = rte_pktmbuf_mtod(buf, struct rte_ether_hdr *);
 
-                        struct xran_ecpri_hdr *ecpri_hdr;
+            // Check if this is coming from the RU
+            if (rte_is_same_ether_addr(&config->ru_configs[ru_idx].ru_addr, &eth_hdr->src_addr)) {
 
-                        ecpri_hdr = rte_pktmbuf_mtod_offset(buf, struct xran_ecpri_hdr *, sizeof(struct rte_ether_hdr));
+                // Check if this was going to the middlebox
+                if (rte_is_same_ether_addr(&config->ru_configs[ru_idx].ru_du_addr, &eth_hdr->dst_addr)) {
+
+                    struct xran_ecpri_hdr *ecpri_hdr;
+
+                    ecpri_hdr = rte_pktmbuf_mtod_offset(buf, struct xran_ecpri_hdr *, sizeof(struct rte_ether_hdr));
             
-                        uint16_t ru_port_id = rte_be_to_cpu_16(ecpri_hdr->ecpri_xtc_id) & 0x000F;
+                    uint16_t ru_port_id = rte_be_to_cpu_16(ecpri_hdr->ecpri_xtc_id) & 0x000F;
 
-                        struct radio_app_common_hdr *app_common_hdr = rte_pktmbuf_mtod_offset(buf, struct radio_app_common_hdr *,
-                            sizeof(struct rte_ether_hdr) + sizeof(struct xran_ecpri_hdr));
+                    struct radio_app_common_hdr *app_common_hdr = rte_pktmbuf_mtod_offset(buf, struct radio_app_common_hdr *,
+                        sizeof(struct rte_ether_hdr) + sizeof(struct xran_ecpri_hdr));
 
-                        struct radio_app_common_hdr radio_hdr_cpy = *app_common_hdr;
+                    struct radio_app_common_hdr radio_hdr_cpy = *app_common_hdr;
                         radio_hdr_cpy.sf_slot_sym.value = rte_be_to_cpu_16(radio_hdr_cpy.sf_slot_sym.value);
 
-                        uint16_t slot = radio_hdr_cpy.sf_slot_sym.slot_id;
-                        uint16_t subframe = radio_hdr_cpy.sf_slot_sym.subframe_id;
-                        uint16_t symbol = radio_hdr_cpy.sf_slot_sym.symb_id;
+                    uint16_t slot = radio_hdr_cpy.sf_slot_sym.slot_id;
+                    uint16_t subframe = radio_hdr_cpy.sf_slot_sym.subframe_id;
+                    uint16_t symbol = radio_hdr_cpy.sf_slot_sym.symb_id;
 
-                        struct data_section_hdr *data_sec_hdr = rte_pktmbuf_mtod_offset(buf, struct data_section_hdr *,
-                        sizeof(struct rte_ether_hdr) + sizeof(struct xran_ecpri_hdr) + sizeof(struct radio_app_common_hdr));
+                    struct data_section_hdr *data_sec_hdr = rte_pktmbuf_mtod_offset(buf, struct data_section_hdr *,
+                    sizeof(struct rte_ether_hdr) + sizeof(struct xran_ecpri_hdr) + sizeof(struct radio_app_common_hdr));
 
-                        struct data_section_hdr data_sec_hdr_cpy = *data_sec_hdr;
-                        data_sec_hdr_cpy.fields.all_bits = rte_be_to_cpu_32(data_sec_hdr->fields.all_bits);
+                    struct data_section_hdr data_sec_hdr_cpy = *data_sec_hdr;
+                    data_sec_hdr_cpy.fields.all_bits = rte_be_to_cpu_32(data_sec_hdr->fields.all_bits);
 
-                        int num_prbs = 0;
+                    int num_prbs = 0;
+
+                    if (ru_port_id < MAX_PDSCH_PUSCH_PORT) {
+                        num_prbs = 273;
+                    } else {
+                        num_prbs = data_sec_hdr_cpy.fields.num_prbu;
+                    }
+
+                    cached_packets[ru_idx][ru_port_id][symbol][subframe][slot] = buf;
+                    cached_packets_num[ru_port_id][symbol][subframe][slot]++;
+
+                    // If we have all the expected packets, then time to modify and send out.
+                    // For this to be true, the counter should be equal to the number of RUs
+                    // Note: We do not consider losses currently
+                    if (cached_packets_num[ru_port_id][symbol][subframe][slot] == config->num_rus) {
+                        struct rte_mbuf *bufs_to_be_freed[MAX_NUM_RUS] = {0};
+                        int num_to_free[MAX_NUM_RUS] = { 0 };
+
+                        cached_packets_num[ru_port_id][symbol][subframe][slot] = 0;
+                            
+                        void *iq_sum_ptr;
+                        uint8_t tmp_buf[RTE_ETHER_MAX_JUMBO_FRAME_LEN] = {0};
 
                         if (ru_port_id < MAX_PDSCH_PUSCH_PORT) {
-                            num_prbs = 273;
+                            // Use a temporary buffer for storing the sums
+                            iq_sum_ptr = tmp_buf;
                         } else {
-                            num_prbs = data_sec_hdr_cpy.fields.num_prbu;
+                            // No compression, so directly use the IQ samples buffer of the first RU
+                            iq_sum_ptr = rte_pktmbuf_mtod_offset(cached_packets[0][ru_port_id][symbol][subframe][slot], void *,
+                                    IQ_OFFSET);
                         }
 
-                        cached_packets[ru_idx][ru_port_id][symbol][subframe][slot] = buf;
-                        cached_packets_num[ru_port_id][symbol][subframe][slot]++;
-
-                        // If we have all the expected packets, then time to modify and send out.
-                        // For this to be true, the counter should be equal to the number of RUs
-                        // Note: We do not consider losses currently
-                        if (cached_packets_num[ru_port_id][symbol][subframe][slot] == config->num_rus) {
-                            struct rte_mbuf *bufs_to_be_freed[MAX_NUM_RUS] = {0};
-                            int num_to_free[MAX_NUM_RUS] = { 0 };
-
-                            cached_packets_num[ru_port_id][symbol][subframe][slot] = 0;
-                            
-                            void *iq_sum_ptr;
-                            uint8_t tmp_buf[RTE_ETHER_MAX_JUMBO_FRAME_LEN] = {0};
-
-                            if (ru_port_id < MAX_PDSCH_PUSCH_PORT) {
-                                // Use a temporary buffer for storing the sums
-                                iq_sum_ptr = tmp_buf;
-                            } else {
-                                // No compression, so directly use the IQ samples buffer of the first RU
-                                iq_sum_ptr = rte_pktmbuf_mtod_offset(cached_packets[0][ru_port_id][symbol][subframe][slot], void *,
-                                    IQ_OFFSET);
-                            }
-
-                            for (int id = 0; id < config->num_rus; id++) {
+                        for (int id = 0; id < config->num_rus; id++) {
                     
-                                // If there is compression (only for RU ports < 4), decompress them
-                                if (ru_port_id < MAX_PDSCH_PUSCH_PORT) {
-                                    struct xranlib_decompress_request dec_req = {0};
-                                    dec_req.data_in = rte_pktmbuf_mtod_offset(cached_packets[id][ru_port_id][symbol][subframe][slot], void *,
-                                        IQ_OFFSET);
-                                    dec_req.numRBs = num_prbs;
-                                    dec_req.numDataElements = 24;
-                                    dec_req.compMethod = XRAN_COMPMETHOD_BLKFLOAT;
-                                    dec_req.iqWidth = IQ_BIT_WIDTH_COMPRESSED;
-                                    dec_req.reMask = 0xfff;
-                                    dec_req.csf = 0;
-                                    dec_req.ScaleFactor = 1;
+                            // If there is compression (only for RU ports < 4), decompress them
+                            if (ru_port_id < MAX_PDSCH_PUSCH_PORT) {
+                                struct xranlib_decompress_request dec_req = {0};
+                                dec_req.data_in = rte_pktmbuf_mtod_offset(cached_packets[id][ru_port_id][symbol][subframe][slot], void *,
+                                    IQ_OFFSET);
+                                dec_req.numRBs = num_prbs;
+                                dec_req.numDataElements = 24;
+                                dec_req.compMethod = XRAN_COMPMETHOD_BLKFLOAT;
+                                dec_req.iqWidth = IQ_BIT_WIDTH_COMPRESSED;
+                                dec_req.reMask = 0xfff;
+                                dec_req.csf = 0;
+                                dec_req.ScaleFactor = 1;
                         
-                                    // Compressed size
-                                    dec_req.len = num_prbs * (((IQ_BIT_WIDTH_COMPRESSED * 2 * NUM_SUBCARRIERS_PRB) / 8) + 1);
+                                // Compressed size
+                                dec_req.len = num_prbs * (((IQ_BIT_WIDTH_COMPRESSED * 2 * NUM_SUBCARRIERS_PRB) / 8) + 1);
 
-                                    struct xranlib_decompress_response dec_resp = {0};
-                                    dec_resp.data_out = (int16_t *)iq_buffer[id][ru_port_id][symbol][subframe][slot];
-                                    dec_resp.len = num_prbs * ((IQ_BIT_WIDTH_UNCOMPRESSED * 2 * NUM_SUBCARRIERS_PRB) / 8);
+                                struct xranlib_decompress_response dec_resp = {0};
+                                dec_resp.data_out = (int16_t *)iq_buffer[id][ru_port_id][symbol][subframe][slot];
+                                dec_resp.len = num_prbs * ((IQ_BIT_WIDTH_UNCOMPRESSED * 2 * NUM_SUBCARRIERS_PRB) / 8);
                 
-                                    int res = xranlib_decompress(&dec_req, &dec_resp);
+                                int res = xranlib_decompress(&dec_req, &dec_resp);
 
-                                    assert(res == 0);
-                                }
-                    
-                                if (id > 0) {
-                                    // Add the IQ samples of the new buffer
-                                    int16_t *iq_sum = iq_sum_ptr;
-                                    int16_t *iq_sum2;
-                                    if (ru_port_id < MAX_PDSCH_PUSCH_PORT) {
-                                        iq_sum2 = (int16_t *)iq_buffer[id][ru_port_id][symbol][subframe][slot];
-                                    } else {
-                                        iq_sum2 = rte_pktmbuf_mtod_offset(cached_packets[id][ru_port_id][symbol][subframe][slot], void *,
-                                            sizeof(struct rte_ether_hdr) + sizeof(struct xran_ecpri_hdr) + sizeof(struct radio_app_common_hdr) + 
-                                            sizeof(struct data_section_hdr) + sizeof(struct data_section_compression_hdr));
-                                    }
-                                    int num_iq = num_prbs * NUM_SUBCARRIERS_PRB * 2;
-                                    #define assert__(x) for ( ; !(x) ; assert(x) )                          
-#if defined(__AVX512F__)
-                                    sum_arrays_avx512(iq_sum, iq_sum2, num_iq);
-#else
-                                    for (int iq_idx = 0; iq_idx < num_iq; iq_idx++) {
-                                        iq_sum[iq_idx] += iq_sum2[iq_idx];
-                                    }
-#endif
-                                    bufs_to_be_freed[id] = cached_packets[id][ru_port_id][symbol][subframe][slot];
-                                    num_to_free[id]++;
-                                }
-
-                            }
-
-                            struct rte_mbuf *buf_out = cached_packets[0][ru_port_id][symbol][subframe][slot];
-
-                            if (ru_port_id < MAX_PDSCH_PUSCH_PORT) {
-                                struct xranlib_compress_request comp_req = {0};
-                                comp_req.data_in = iq_sum_ptr;
-                                comp_req.numRBs = num_prbs;
-                                comp_req.numDataElements = 24;
-                                comp_req.compMethod = XRAN_COMPMETHOD_BLKFLOAT;
-                                comp_req.iqWidth = IQ_BIT_WIDTH_COMPRESSED;
-                                comp_req.reMask = 0xfff;
-                                comp_req.csf = 0;
-                                comp_req.ScaleFactor = 1;
-                                comp_req.len = num_prbs * NUM_SUBCARRIERS_PRB * IQ_BIT_WIDTH_UNCOMPRESSED * 2;;
-
-                                struct xranlib_compress_response comp_resp = {0};
-
-                                comp_resp.data_out = rte_pktmbuf_mtod_offset(buf_out, void *,
-                                    IQ_OFFSET);
-                                comp_resp.len = num_prbs * (((IQ_BIT_WIDTH_COMPRESSED * 2 * NUM_SUBCARRIERS_PRB) / 8) + 1);
-                                int res = xranlib_compress(&comp_req, &comp_resp);
                                 assert(res == 0);
                             }
-
-
-                            ru_tx_bufs[ru_tx_idx++] = buf_out;
-                            struct rte_ether_hdr *eth_hdr = rte_pktmbuf_mtod(buf_out, struct rte_ether_hdr *);
-
-                            rte_ether_addr_copy(&config->du_addr, &eth_hdr->dst_addr);
-                            rte_ether_addr_copy(&config->middlebox_addr, &eth_hdr->src_addr);
-
-                            if (buf_out->ol_flags & RTE_MBUF_F_RX_VLAN) {
-                                buf_out->ol_flags |= RTE_MBUF_F_TX_VLAN;
-                                buf_out->vlan_tci = config->du_vlan;
-                            }
-
-                            for (int idx = 1; idx < config->num_rus; idx++) {
-                                if (num_to_free[idx] > 0) {
-                                    rte_pktmbuf_free(bufs_to_be_freed[idx]);
+                    
+                            if (id > 0) {
+                                // Add the IQ samples of the new buffer
+                                int16_t *iq_sum = iq_sum_ptr;
+                                int16_t *iq_sum2;
+                                if (ru_port_id < MAX_PDSCH_PUSCH_PORT) {
+                                    iq_sum2 = (int16_t *)iq_buffer[id][ru_port_id][symbol][subframe][slot];
+                                } else {
+                                    iq_sum2 = rte_pktmbuf_mtod_offset(cached_packets[id][ru_port_id][symbol][subframe][slot], void *,
+                                        sizeof(struct rte_ether_hdr) + sizeof(struct xran_ecpri_hdr) + sizeof(struct radio_app_common_hdr) + 
+                                        sizeof(struct data_section_hdr) + sizeof(struct data_section_compression_hdr));
                                 }
+                                int num_iq = num_prbs * NUM_SUBCARRIERS_PRB * 2;
+                                #define assert__(x) for ( ; !(x) ; assert(x) )                          
+#if defined(__AVX512F__)
+                                sum_arrays_avx512(iq_sum, iq_sum2, num_iq);
+#else
+                                for (int iq_idx = 0; iq_idx < num_iq; iq_idx++) {
+                                    iq_sum[iq_idx] += iq_sum2[iq_idx];
+                                }
+#endif
+                                bufs_to_be_freed[id] = cached_packets[id][ru_port_id][symbol][subframe][slot];
+                                num_to_free[id]++;
                             }
                         }
-                    } else {
-                        rte_pktmbuf_free(buf);
-                        continue;
+
+                        struct rte_mbuf *buf_out = cached_packets[0][ru_port_id][symbol][subframe][slot];
+
+                        if (ru_port_id < MAX_PDSCH_PUSCH_PORT) {
+                            struct xranlib_compress_request comp_req = {0};
+                            comp_req.data_in = iq_sum_ptr;
+                            comp_req.numRBs = num_prbs;
+                            comp_req.numDataElements = 24;
+                            comp_req.compMethod = XRAN_COMPMETHOD_BLKFLOAT;
+                            comp_req.iqWidth = IQ_BIT_WIDTH_COMPRESSED;
+                            comp_req.reMask = 0xfff;
+                            comp_req.csf = 0;
+                            comp_req.ScaleFactor = 1;
+                            comp_req.len = num_prbs * NUM_SUBCARRIERS_PRB * IQ_BIT_WIDTH_UNCOMPRESSED * 2;;
+
+                            struct xranlib_compress_response comp_resp = {0};
+
+                            comp_resp.data_out = rte_pktmbuf_mtod_offset(buf_out, void *,
+                                IQ_OFFSET);
+                            comp_resp.len = num_prbs * (((IQ_BIT_WIDTH_COMPRESSED * 2 * NUM_SUBCARRIERS_PRB) / 8) + 1);
+                            int res = xranlib_compress(&comp_req, &comp_resp);
+                            assert(res == 0);
+                        }
+
+
+                        ru_tx_bufs[ru_tx_idx++] = buf_out;
+                        struct rte_ether_hdr *eth_hdr = rte_pktmbuf_mtod(buf_out, struct rte_ether_hdr *);
+
+                        rte_ether_addr_copy(&config->du_addr, &eth_hdr->dst_addr);
+                        rte_ether_addr_copy(&config->middlebox_addr, &eth_hdr->src_addr);
+
+                        if (buf_out->ol_flags & RTE_MBUF_F_RX_VLAN) {
+                            buf_out->ol_flags |= RTE_MBUF_F_TX_VLAN;
+                            buf_out->vlan_tci = config->du_vlan;
+                        }
+
+                        for (int idx = 1; idx < config->num_rus; idx++) {
+                            if (num_to_free[idx] > 0) {
+                                rte_pktmbuf_free(bufs_to_be_freed[idx]);
+                            }
+                        }
                     }
                 } else {
                     rte_pktmbuf_free(buf);
                     continue;
                 }
-            }
-            if (ru_tx_idx > 0) {
-                uint16_t nb_tx = rte_eth_tx_burst(config->nic_port_id, 0, ru_tx_bufs, ru_tx_idx);
-                assert(nb_tx == ru_tx_idx);
-                if (unlikely(nb_tx < ru_tx_idx)) {
-                    for (int i = nb_tx; i < ru_tx_idx; i++) {
-                        rte_pktmbuf_free(ru_tx_bufs[i]);
-                    }
-                } 
+            } else {
+                rte_pktmbuf_free(buf);
+                continue;
             }
         }
+        if (ru_tx_idx > 0) {
+            uint16_t nb_tx = rte_eth_tx_burst(config->ru_configs[0].nic_port_id, 0, ru_tx_bufs, ru_tx_idx);
+            assert(nb_tx == ru_tx_idx);
+            if (unlikely(nb_tx < ru_tx_idx)) {
+                for (int i = nb_tx; i < ru_tx_idx; i++) {
+                    rte_pktmbuf_free(ru_tx_bufs[i]);
+                }
+            } 
+        }
+    }
+    return 0;
+}
+
+
+
+int
+run_single_worker(void *args) 
+{
+    struct middlebox_config *config = (struct middlebox_config *)args;
+
+    set_sched_fifo();
+
+    while (true) {
+        
+        ranbooster_handle_tx(config);
+        ranbooster_handle_rx(config);
+      
+    }
+    return 0;
+}
+
+int
+run_tx_worker(void *args) 
+{
+    set_sched_fifo();
+    while (true) {
+        ranbooster_handle_tx(args);
+    }
+    return 0;
+}
+
+int
+run_rx_worker(void *args) 
+{
+    set_sched_fifo();
+    while (true) {
+        ranbooster_handle_rx(args);
     }
     return 0;
 }
@@ -598,12 +646,18 @@ main(int argc, char *argv[]) {
         ru_idx++;
     }
 
-    if (rte_lcore_count() > 1)
-        printf("\nWARNING: Too many lcores enabled. Only 1 used.\n");
-
-    set_sched_fifo();
-
-    lcore_main(&config);
-
+    if (rte_lcore_count() == 1) {
+        printf("Single core used, so running one worker thread\n");
+        run_single_worker(&config);
+    } else {
+        if (rte_eal_wait_lcore(2) == 0) {
+            printf("Worker 2 is ready.\n");
+            rte_eal_remote_launch(run_rx_worker, &config, 2);
+        }
+        
+        printf("Running worker 1\n");
+        run_tx_worker(&config);
+    }
+    
     return 0;
 }
