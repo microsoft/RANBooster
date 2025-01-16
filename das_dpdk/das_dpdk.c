@@ -24,8 +24,8 @@
 
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 32
-#define RX_BURST_SIZE 32
-#define TX_BURST_SIZE 32
+#define RX_BURST_SIZE 128
+#define TX_BURST_SIZE 128
 
 #define MAX_NUM_RUS 5
 
@@ -260,7 +260,7 @@ int
 _handle_du_burst(struct middlebox_config *config, struct rte_mbuf **mx_bufs, int nb_rx, int queue_id)
 {
 
-    struct rte_mbuf *mx_tx_bufs[RX_BURST_SIZE];
+    struct rte_mbuf *mx_tx_bufs[RX_BURST_SIZE] = {0};
     
     uint16_t mx_tx_idx = 0;
     
@@ -341,9 +341,6 @@ _handle_du_burst(struct middlebox_config *config, struct rte_mbuf **mx_bufs, int
     if (mx_tx_idx > 0) {
         uint16_t nb_tx = rte_eth_tx_burst(config->nic_port_id, queue_id, mx_tx_bufs, mx_tx_idx);
 
-        if (nb_tx != mx_tx_idx) {
-            printf("I was supposed to send %d, but I sent %d\n", mx_tx_idx, nb_tx);
-        }
         assert(nb_tx == mx_tx_idx);
 
         sent_du_pkts[queue_id] += nb_tx;
