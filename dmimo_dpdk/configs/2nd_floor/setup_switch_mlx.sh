@@ -12,13 +12,13 @@ ip link set enp75s0np0 vf 2 trust on
 ip link set enp75s0np0 vf 0 mac 00:00:11:11:22:22 spoofchk off
 ip link set enp75s0v0 address 00:00:11:11:22:22
 
-# RU 7
-ip link set enp75s0np0 vf 1 mac 00:11:22:33:0B:6E spoofchk off
-ip link set enp75s0v1 address 00:11:22:33:0B:6E
+# RU 12
+ip link set enp75s0np0 vf 1 mac 00:11:22:33:0B:42 spoofchk off
+ip link set enp75s0v1 address 00:11:22:33:0B:42
 
-# RU 21
-ip link set enp75s0np0 vf 2 mac 00:11:22:33:0B:40 spoofchk off
-ip link set enp75s0v2 address 00:11:22:33:0B:40
+# RU 20
+ip link set enp75s0np0 vf 2 mac 00:11:22:33:0B:50 spoofchk off
+ip link set enp75s0v2 address 00:11:22:33:0B:50
 
 ip link set dev enp75s0np0 mtu 9600
 ip link set dev enp75s0v0 mtu 9600

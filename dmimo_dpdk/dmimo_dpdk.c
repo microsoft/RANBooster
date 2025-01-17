@@ -18,7 +18,7 @@
 #define MBUF_CACHE_SIZE 32
 #define BURST_SIZE 32
 
-#define MAX_NUM_RUS 2
+#define MAX_NUM_RUS 4
 
 #define VLAN_VID_MASK    0x0FFF
 #define ETHER_JUMBO_FRAME_SIZE 8600
@@ -262,7 +262,7 @@ lcore_main(void *args)
                     } else if (ecpri_message_type == ECPRI_IQ_DATA) {
 
                         // Find the correct RU to send the packet to
-                        for (int ru_idx = 0; ru_idx < config->num_rus; ru_idx++) {
+                        for (int ru_idx = 0; ru_idx < config->num_rus; ru_idx++) {  
              
                             if ((config->ru_configs[ru_idx].antenna_port_fwd_bitmap & (1 << ru_port_id)) > 0) {
                                 rte_ether_addr_copy(&config->ru_configs[ru_idx].ru_addr, &eth_hdr->dst_addr);
@@ -388,11 +388,12 @@ lcore_main(void *args)
 
 int
 main(int argc, char *argv[]) {
-    const char *mb_pci_addr_str, *ru1_du_pci_addr_str, *ru2_du_pci_addr_str;
-    struct rte_ether_addr ru1_addr, ru2_addr, du_addr;
-    uint16_t ru1_vlan, ru2_vlan, du_vlan;
-    uint16_t ru1_port_fwd_bitmap, ru2_port_fwd_bitmap;
+    const char *mb_pci_addr_str, *ru_du_pci_addr_str;
+    struct rte_ether_addr du_addr, ru_addr;
+    uint16_t du_vlan, ru_vlan;
+    uint16_t ru_port_fwd_bitmap;
     struct middlebox_config config;
+    int num_rus;
 
     int eal_argc = rte_eal_init(argc, argv);
 
@@ -401,6 +402,9 @@ main(int argc, char *argv[]) {
     argc -= eal_argc;
     argv += eal_argc;
 
+    num_rus = (argc - 3) / 4;
+    config.num_rus = num_rus;
+
 
     // TODO
     if (argc < 3) {
@@ -408,38 +412,32 @@ main(int argc, char *argv[]) {
     }
 
     mb_pci_addr_str = argv[1];
-    ru1_du_pci_addr_str = argv[2];
-    ru1_vlan = atoi(argv[3]);
-    parse_mac_address(argv[4], &ru1_addr);
-    printf("RU1 MAC address: %s\n", argv[4]);
-    ru1_port_fwd_bitmap = atoi(argv[5]);
-    ru2_du_pci_addr_str = argv[6];
-    ru2_vlan = atoi(argv[7]);
-    parse_mac_address(argv[8], &ru2_addr);
-    printf("RU2 MAC address: %s\n", argv[8]);
-    ru2_port_fwd_bitmap = atoi(argv[9]);
-    parse_mac_address(argv[10], &du_addr);
-    du_vlan = atoi(argv[11]);
+    parse_mac_address(argv[2], &du_addr);
+    du_vlan = atoi(argv[3]);
 
     get_port_from_pci(mb_pci_addr_str, &config.nic_port_id);
     rte_eth_macaddr_get(config.nic_port_id, &config.middlebox_addr);
 
-    config.num_rus = MAX_NUM_RUS;
-
-    get_port_from_pci(ru1_du_pci_addr_str, &config.ru_configs[0].nic_port_id);
-    rte_eth_macaddr_get(config.ru_configs[0].nic_port_id, &config.ru_configs[0].ru_du_addr);
-    config.ru_configs[0].vlan = ru1_vlan;
-    config.ru_configs[0].antenna_port_fwd_bitmap = ru1_port_fwd_bitmap;
-    config.ru_configs[0].ru_addr = ru1_addr;
-
-    get_port_from_pci(ru2_du_pci_addr_str, &config.ru_configs[1].nic_port_id);
-    rte_eth_macaddr_get(config.ru_configs[1].nic_port_id, &config.ru_configs[1].ru_du_addr);
-    config.ru_configs[1].vlan = ru2_vlan;
-    config.ru_configs[1].antenna_port_fwd_bitmap = ru2_port_fwd_bitmap;
-    config.ru_configs[1].ru_addr = ru2_addr;
-
     config.du_addr = du_addr;
     config.du_vlan = du_vlan;
+
+    int ru_idx = 0;
+    for (int arg_idx = 4; arg_idx < argc; arg_idx += 4) {
+        
+        ru_du_pci_addr_str = argv[arg_idx];
+        ru_vlan = atoi(argv[arg_idx + 1]);
+        printf("RU %d MAC address: %s\n", ru_idx, argv[arg_idx + 2]);
+        parse_mac_address(argv[arg_idx + 2], &ru_addr);
+        ru_port_fwd_bitmap = atoi(argv[arg_idx + 3]);
+
+        get_port_from_pci(ru_du_pci_addr_str, &config.ru_configs[ru_idx].nic_port_id);
+        rte_eth_macaddr_get(config.ru_configs[ru_idx].nic_port_id, &config.ru_configs[ru_idx].ru_du_addr);
+        config.ru_configs[ru_idx].vlan = ru_vlan;
+        config.ru_configs[ru_idx].antenna_port_fwd_bitmap = ru_port_fwd_bitmap;
+        config.ru_configs[ru_idx].ru_addr = ru_addr;
+        ru_idx++;
+    }    
+
 
     config.mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS,
         MBUF_CACHE_SIZE, 0, ETHER_JUMBO_FRAME_SIZE + RTE_PKTMBUF_HEADROOM + 100, SOCKET_ID_ANY);
