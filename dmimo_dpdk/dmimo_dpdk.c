@@ -20,6 +20,12 @@
 
 #define MAX_NUM_RUS 4
 
+#define IQ_OFFSET   sizeof(struct rte_ether_hdr) + \
+                    sizeof(struct xran_ecpri_hdr) + \
+                    sizeof(struct radio_app_common_hdr) + \
+                    sizeof(struct data_section_hdr) + \
+                    sizeof(struct data_section_compression_hdr)
+
 #define VLAN_VID_MASK    0x0FFF
 #define ETHER_JUMBO_FRAME_SIZE 8600
 
@@ -42,7 +48,8 @@ struct ru_config {
     struct rte_ether_addr ru_addr;
     struct rte_ether_addr ru_du_addr;
     uint16_t vlan;
-    uint16_t antenna_port_fwd_bitmap;
+    int8_t antenna_fwd_map_dl[NUM_ANTENNA_PORTS];
+    int8_t antenna_fwd_map_ul[NUM_ANTENNA_PORTS];
     struct rte_mempool *mbuf_pool;
     struct rte_mempool *mbuf_pool_clone;
 };
@@ -183,6 +190,8 @@ mcast_out_pkt(struct rte_mbuf *pkt, struct rte_mempool *pool)
         return hdr;
 }
 
+uint8_t payload[15000] = {0};
+
 int
 lcore_main(void *args) 
 {
@@ -214,57 +223,56 @@ lcore_main(void *args)
 
                     if (ecpri_message_type == ECPRI_RT_CONTROL_DATA) {
 
-                        // struct rte_mbuf *tx_bufs[MAX_NUM_RUS];
-                        // int tx_idx = 0;
+                        bool found = false;
+                        for (int ru_idx = 0; ru_idx < config->num_rus; ru_idx++) {
+                            if (config->ru_configs[ru_idx].antenna_fwd_map_dl[ru_port_id] >= 0) {
 
-                        //printf("Received control data\n");
+                                rte_ether_addr_copy(&config->ru_configs[ru_idx].ru_addr, &eth_hdr->dst_addr);
+                                rte_ether_addr_copy(&config->ru_configs[ru_idx].ru_du_addr, &eth_hdr->src_addr);
 
-                        rte_pktmbuf_adj(buf, (uint16_t)sizeof(struct rte_ether_hdr));
-    
+                                if (buf->ol_flags & RTE_MBUF_F_RX_VLAN) {
+                                    buf->ol_flags |= RTE_MBUF_F_TX_VLAN;
+                                    buf->vlan_tci = config->ru_configs[ru_idx].vlan;
+                                }
 
-                        // Send the control data to all the RUs
-                        for (int i = 1; i < config->num_rus; i++) {
-                            struct rte_mbuf *clone = mcast_out_pkt(buf, config->ru_configs[i].mbuf_pool_clone);
-                            assert(clone != NULL);
+                                //printf("Will send control port id %d to port id %d for RU %d and vlan %d\n", ru_port_id, config->ru_configs[ru_idx].antenna_fwd_map_dl[ru_port_id], ru_idx, config->ru_configs[rx_idx].vlan);
+                                ecpri_hdr->ecpri_xtc_id = rte_cpu_to_be_16((ru_port_id & 0xFFF0) | config->ru_configs[ru_idx].antenna_fwd_map_dl[ru_port_id]);
 
-                            struct rte_ether_hdr *ethdr;
-
-                            ethdr = (struct rte_ether_hdr *)rte_pktmbuf_prepend(clone, (uint16_t)sizeof(*ethdr));
-
-                            rte_ether_addr_copy(&config->ru_configs[i].ru_addr, &ethdr->dst_addr);
-                            rte_ether_addr_copy(&config->ru_configs[i].ru_du_addr, &ethdr->src_addr);
-                            ethdr->ether_type = rte_be_to_cpu_16(RTE_ETHER_TYPE_ECPRI);
-
-                            if (buf->ol_flags & RTE_MBUF_F_RX_VLAN) {
-                                clone->ol_flags |= RTE_MBUF_F_TX_VLAN;
-                                clone->vlan_tci = config->ru_configs[i].vlan;
+                                mx_tx_bufs[mx_tx_idx++] = buf;
+                                found = true;
+                                break;
                             }
-
-                            mx_tx_bufs[mx_tx_idx++] = clone;
                         }
 
-                        struct rte_ether_hdr *ethdr;
-
-                        ethdr = (struct rte_ether_hdr *)rte_pktmbuf_prepend(buf, (uint16_t)sizeof(*ethdr));
-
-                        rte_ether_addr_copy(&config->ru_configs[0].ru_addr, &ethdr->dst_addr);
-                        rte_ether_addr_copy(&config->ru_configs[0].ru_du_addr, &ethdr->src_addr);
-
-                        ethdr->ether_type = rte_be_to_cpu_16(RTE_ETHER_TYPE_ECPRI);
-
-                        if (buf->ol_flags & RTE_MBUF_F_RX_VLAN) {
-                            buf->ol_flags |= RTE_MBUF_F_TX_VLAN;
-                            buf->vlan_tci = config->ru_configs[0].vlan;
+                        if (!found) {
+                            rte_pktmbuf_free(buf);
                         }
-
-                        mx_tx_bufs[mx_tx_idx++] = buf;
 
                     } else if (ecpri_message_type == ECPRI_IQ_DATA) {
+
+                        // Send the SSB to all the antennas
+                        struct radio_app_common_hdr *app_common_hdr = rte_pktmbuf_mtod_offset(buf, struct radio_app_common_hdr *,
+                            sizeof(struct rte_ether_hdr) + sizeof(struct xran_ecpri_hdr));
+
+                        struct radio_app_common_hdr radio_hdr_cpy = *app_common_hdr;
+                            radio_hdr_cpy.sf_slot_sym.value = rte_be_to_cpu_16(radio_hdr_cpy.sf_slot_sym.value);
+
+                        uint16_t slot = radio_hdr_cpy.sf_slot_sym.slot_id;
+                        uint16_t subframe = radio_hdr_cpy.sf_slot_sym.subframe_id;
+                        uint16_t symbol = radio_hdr_cpy.sf_slot_sym.symb_id;
+
+                        if (slot == 0 && subframe == 0 && (symbol >=2 && symbol <  6)) {
+                            if (ru_port_id == 0) {
+                                memcpy(payload, rte_pktmbuf_mtod_offset(buf, uint8_t *, IQ_OFFSET + (12 * (((9 * 2 * 12) / 8) + 1))), 20 * (((9 * 2 * 12) / 8) + 1));
+                            } else {
+                                memcpy(rte_pktmbuf_mtod_offset(buf, uint8_t *, IQ_OFFSET + (12 * (((9 * 2 * 12) / 8) + 1))), payload, 20 * (((9 * 2 * 12) / 8) + 1));
+                            }
+                        }
 
                         // Find the correct RU to send the packet to
                         for (int ru_idx = 0; ru_idx < config->num_rus; ru_idx++) {  
              
-                            if ((config->ru_configs[ru_idx].antenna_port_fwd_bitmap & (1 << ru_port_id)) > 0) {
+                            if (config->ru_configs[ru_idx].antenna_fwd_map_dl[ru_port_id] >= 0) {
                                 rte_ether_addr_copy(&config->ru_configs[ru_idx].ru_addr, &eth_hdr->dst_addr);
                                 rte_ether_addr_copy(&config->ru_configs[ru_idx].ru_du_addr, &eth_hdr->src_addr);
 
@@ -273,6 +281,9 @@ lcore_main(void *args)
                                     buf->vlan_tci = config->ru_configs[ru_idx].vlan;
                             
                                 }
+
+                                // Change ru_port_id to the new one
+                                ecpri_hdr->ecpri_xtc_id = rte_cpu_to_be_16((ru_port_id & 0xFFF0) | config->ru_configs[ru_idx].antenna_fwd_map_dl[ru_port_id]);
 
                                 mx_tx_bufs[mx_tx_idx++] = buf;
                                 break;
@@ -338,7 +349,7 @@ lcore_main(void *args)
                     // Check if this was going to the middlebox
                     if (rte_is_same_ether_addr(&config->ru_configs[ru_idx].ru_du_addr, &eth_hdr->dst_addr)) {
 
-                        if ((config->ru_configs[ru_idx].antenna_port_fwd_bitmap & (1 << ru_port_id)) > 0) {
+                        if (config->ru_configs[ru_idx].antenna_fwd_map_ul[ru_port_id] >= 0) {
 
                             rte_ether_addr_copy(&config->du_addr, &eth_hdr->dst_addr);
                             rte_ether_addr_copy(&config->middlebox_addr, &eth_hdr->src_addr);
@@ -347,6 +358,11 @@ lcore_main(void *args)
                                 buf->ol_flags |= RTE_MBUF_F_TX_VLAN;
                                 buf->vlan_tci = config->du_vlan;
                             }
+
+                            //printf("Will send port id %d to port id %d for RU %d\n", ru_port_id, config->ru_configs[ru_idx].antenna_fwd_map_ul[ru_port_id], ru_idx);
+
+                            // Change the RU port ID to the correct one
+                            ecpri_hdr->ecpri_xtc_id = rte_cpu_to_be_16((ru_port_id & 0xFFF0) | config->ru_configs[ru_idx].antenna_fwd_map_ul[ru_port_id]);
 
                             ru_tx_bufs[ru_tx_idx++] = buf;
 
@@ -433,8 +449,36 @@ main(int argc, char *argv[]) {
         get_port_from_pci(ru_du_pci_addr_str, &config.ru_configs[ru_idx].nic_port_id);
         rte_eth_macaddr_get(config.ru_configs[ru_idx].nic_port_id, &config.ru_configs[ru_idx].ru_du_addr);
         config.ru_configs[ru_idx].vlan = ru_vlan;
-        config.ru_configs[ru_idx].antenna_port_fwd_bitmap = ru_port_fwd_bitmap;
         config.ru_configs[ru_idx].ru_addr = ru_addr;
+
+        int target_port_id = 0;
+        for (int ru_port_id = 0; ru_port_id < NUM_ANTENNA_PORTS; ru_port_id++) {
+            if(ru_port_fwd_bitmap & (1 << ru_port_id)) {
+                config.ru_configs[ru_idx].antenna_fwd_map_dl[ru_port_id] = target_port_id;
+                target_port_id++;
+            } else {
+                config.ru_configs[ru_idx].antenna_fwd_map_dl[ru_port_id] = -1;
+            }
+        }
+
+        for (int ru_port_id = 0; ru_port_id < NUM_ANTENNA_PORTS; ru_port_id++) {
+            printf("DL port %d will be forwarded to RU port %d for vlan %d\n", ru_port_id, config.ru_configs[ru_idx].antenna_fwd_map_dl[ru_port_id], config.ru_configs[ru_idx].vlan);
+        }
+
+        for (int i = 0; i < NUM_ANTENNA_PORTS; i++) {
+            config.ru_configs[ru_idx].antenna_fwd_map_ul[i] = -1;
+        }
+        int index = 0;
+        for (int ru_port_id = 0; ru_port_id < NUM_ANTENNA_PORTS; ru_port_id++) {
+            if(ru_port_fwd_bitmap & (1 << ru_port_id)) {
+                config.ru_configs[ru_idx].antenna_fwd_map_ul[index++] = ru_port_id;
+            }
+        }
+
+        for (int ru_port_id = 0; ru_port_id < NUM_ANTENNA_PORTS; ru_port_id++) {
+            printf("UL port %d will be forwarded to DU port %d for vlan %d\n", ru_port_id, config.ru_configs[ru_idx].antenna_fwd_map_ul[ru_port_id], config.du_vlan);
+        }
+
         ru_idx++;
     }    
 
