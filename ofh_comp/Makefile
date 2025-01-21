@@ -1,23 +1,30 @@
+# Compiler and flags
 CXX = icx
-CXXFLAGS = -Wall -Wextra -march=native -fPIC -std=c++17
+CXXFLAGS = -Wall -Wextra -march=native -std=c++17 -O3 -fPIE
 
-# Target name for the shared library
-TARGET = libofhcompress.so
+# Library name
+LIB_NAME = libofhcompress.a
 
 # Source files and object files
-SRCS = $(wildcard *.cpp)
-OBJS = $(SRCS:.cpp=.o)
+SRC = $(wildcard *.cpp)
+OBJ = $(SRC:.cpp=.o)
 
-# Build the shared library
-$(TARGET): $(OBJS)
-	$(CXX) -shared -o $@ $(OBJS)
+# Default target
+all: $(LIB_NAME)
 
-# Rule to build object files
+# Rule to build the static library
+$(LIB_NAME): $(OBJ)
+	@echo "Creating static library $(LIB_NAME)..."
+	ar rcs $@ $^
+
+# Rule to compile source files into object files
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
-	# Clean up build artifacts
 
-.PHONY: clean
-	
+# Clean up build artifacts
 clean:
-	rm -f $(OBJS) $(TARGET)
+	@echo "Cleaning up..."
+	rm -f $(OBJ) $(LIB_NAME)
+
+# Phony targets
+.PHONY: all clean

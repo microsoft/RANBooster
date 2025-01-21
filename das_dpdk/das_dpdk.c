@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
+#include <sys/time.h>
 
 #include <immintrin.h>
 
@@ -20,12 +22,13 @@
 #define TX_RING_SIZE 4096
 
 #define WORKER_RING_SIZE 1024
-#define MAX_WORKERS 3
+#define MAX_WORKERS 4
 
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 32
-#define RX_BURST_SIZE 128
-#define TX_BURST_SIZE 128
+#define RX_BURST_SIZE 32
+#define TX_BURST_SIZE 16
+#define TX_OUT_BUFS 192
 
 #define MAX_NUM_RUS 5
 
@@ -56,7 +59,7 @@ static const struct rte_eth_conf port_conf_default = {
         .offloads = RTE_ETH_RX_OFFLOAD_CHECKSUM | RTE_ETH_RX_OFFLOAD_VLAN_STRIP
     },
     .txmode = {
-        .offloads = RTE_ETH_TX_OFFLOAD_VLAN_INSERT | RTE_ETH_TX_OFFLOAD_MULTI_SEGS | RTE_ETH_TX_OFFLOAD_IPV4_CKSUM | RTE_ETH_TX_OFFLOAD_TCP_CKSUM | RTE_ETH_TX_OFFLOAD_UDP_CKSUM,
+        .offloads = RTE_ETH_TX_OFFLOAD_VLAN_INSERT | RTE_ETH_TX_OFFLOAD_MULTI_SEGS, // | RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE | RTE_ETH_TX_OFFLOAD_IPV4_CKSUM | RTE_ETH_TX_OFFLOAD_TCP_CKSUM | RTE_ETH_TX_OFFLOAD_UDP_CKSUM,
         .mq_mode = RTE_ETH_MQ_TX_NONE
     },
 };
@@ -206,29 +209,29 @@ void check_link_status(uint16_t port_id) {
 static inline struct rte_mbuf *
 mcast_out_pkt(struct rte_mbuf *pkt, struct rte_mempool *pool)
 {
-        struct rte_mbuf *hdr;
+    struct rte_mbuf *hdr;
 
-        /* Create new mbuf for the header. */
-        hdr = rte_pktmbuf_alloc(pkt->pool);
-        assert(hdr != NULL);
-        // if ((hdr = rte_pktmbuf_alloc(pkt->pool)) == NULL)
-        //         return NULL;
+    /* Create new mbuf for the header. */
+    hdr = rte_pktmbuf_alloc(pool);
+    assert(hdr != NULL);
+    // if ((hdr = rte_pktmbuf_alloc(pkt->pool)) == NULL)
+    //         return NULL;
 
-        /* If requested, then make a new clone packet. */
-        if ((pkt = rte_pktmbuf_clone(pkt, pool)) == NULL) {
-                rte_pktmbuf_free(hdr);
-                return NULL;
-        }
+    /* If requested, then make a new clone packet. */
+    if ((pkt = rte_pktmbuf_clone(pkt, pool)) == NULL) {
+        //rte_pktmbuf_free(hdr);
+        return NULL;
+    }
 
-        /* prepend new header */
-        hdr->next = pkt;
+    /* prepend new header */
+    hdr->next = pkt;
 
-        /* update header's fields */
-        hdr->pkt_len = (uint16_t)(hdr->data_len + pkt->pkt_len);
-        hdr->nb_segs = pkt->nb_segs + 1;
+    /* update header's fields */
+    hdr->pkt_len = (uint16_t)(hdr->data_len + pkt->pkt_len);
+    hdr->nb_segs = pkt->nb_segs + 1;
 
-        __rte_mbuf_sanity_check(hdr, 1);
-        return hdr;
+    __rte_mbuf_sanity_check(hdr, 1);
+    return hdr;
 }
 
 #if defined(__AVX512F__)
@@ -254,14 +257,14 @@ void sum_arrays_avx512(int16_t *iq_sum, int16_t *iq_sum2, int num_iq) {
 }
 #endif
 
-int sent_du_pkts[MAX_WORKERS] = {0};
+long sent_du_pkts[MAX_WORKERS] = {0};
 
 int
 _handle_du_burst(struct middlebox_config *config, struct rte_mbuf **mx_bufs, int nb_rx, int queue_id)
 {
 
-    struct rte_mbuf *mx_tx_bufs[RX_BURST_SIZE] = {0};
-    
+    struct rte_mbuf *mx_tx_bufs[TX_OUT_BUFS] = {0};
+
     uint16_t mx_tx_idx = 0;
     
     for (int rx_idx = 0; rx_idx < nb_rx; rx_idx++) {
@@ -280,7 +283,6 @@ _handle_du_burst(struct middlebox_config *config, struct rte_mbuf **mx_bufs, int
 
             // Check if this was going to the middlebox
             if (rte_is_same_ether_addr(&config->middlebox_addr, &eth_hdr->dst_addr)) {
-
                 if (ecpri_message_type == ECPRI_RT_CONTROL_DATA || ecpri_message_type == ECPRI_IQ_DATA) {
 
                     rte_pktmbuf_adj(buf, (uint16_t)sizeof(struct rte_ether_hdr));
@@ -344,9 +346,9 @@ _handle_du_burst(struct middlebox_config *config, struct rte_mbuf **mx_bufs, int
         assert(nb_tx == mx_tx_idx);
 
         sent_du_pkts[queue_id] += nb_tx;
-        if (sent_du_pkts[queue_id] % 100000 == 0) {
-            printf("Sent %d DU packets on queue %d\n", sent_du_pkts[queue_id], queue_id);
-        }
+        // if (sent_du_pkts[queue_id] % 100000 == 0) {
+        //     printf("Sent %ld DU packets on queue %d\n", sent_du_pkts[queue_id], queue_id);
+        // }
 
         if (unlikely(nb_tx < mx_tx_idx)) {
             for (int i = nb_tx; i < mx_tx_idx; i++) {
@@ -354,6 +356,7 @@ _handle_du_burst(struct middlebox_config *config, struct rte_mbuf **mx_bufs, int
             }
         }
     }
+
     return 0;
 }
 
@@ -373,10 +376,13 @@ ranbooster_handle_du(void *args, int target_worker)
         } else {
             _handle_du_burst(config, mx_bufs, nb_rx, 0);
         }
+
     }
 
     return 0;
 }
+
+long sent_ru_pkts[NUM_ANTENNA_PORTS] = {0};
 
 int 
 process_pkts(struct rte_mbuf **ul_pkts, 
@@ -386,7 +392,6 @@ process_pkts(struct rte_mbuf **ul_pkts,
             struct middlebox_config *config,
             int out_port_idx) 
 {
-                        
     struct rte_mbuf *bufs_to_be_freed[MAX_NUM_RUS] = {0};
     int num_to_free[MAX_NUM_RUS] = { 0 };
 
@@ -450,6 +455,7 @@ process_pkts(struct rte_mbuf **ul_pkts,
 #endif
                 bufs_to_be_freed[id] = ul_pkts[id];
                 num_to_free[id]++;
+                ul_pkts[id] = NULL;
             }
         }
 
@@ -486,25 +492,29 @@ process_pkts(struct rte_mbuf **ul_pkts,
             buf_out->vlan_tci = config->du_vlan;
         }
 
-        uint16_t nb_tx = rte_eth_tx_burst(config->ru_configs[out_port_idx].nic_port_id, 0, &buf_out, 1);
+        uint16_t nb_tx = rte_eth_tx_burst(config->ru_configs[out_port_idx].nic_port_id, out_port_idx, &buf_out, 1);
         assert(nb_tx == 1);
-        //sent_ru_pkts[out_port_idx]++;
+        sent_ru_pkts[out_port_idx]++;
 
-        // if (sent_ru_pkts[out_port_idx] % 1000 == 0) {
-        //     printf("Sent %d packets on port %d\n", sent_ru_pkts[out_port_idx], out_port_idx);
+        // if (sent_ru_pkts[out_port_idx] % 10000 == 0) {
+        //     printf("Sent %ld RU packets on port %d\n", sent_ru_pkts[out_port_idx], out_port_idx);
         // }
         if (unlikely(nb_tx < 1)) {
             rte_pktmbuf_free(buf_out);
         }
 
+        ul_pkts[0] = NULL;
+
+
         for (int idx = 1; idx < config->num_rus; idx++) {
             if (num_to_free[idx] > 0) {
                 rte_pktmbuf_free(bufs_to_be_freed[idx]);
             }
+            ul_pkts[idx] = NULL;
         }
+    
     return 0;
 }
-
 
 int
 ranbooster_handle_rus(void *args)
@@ -561,6 +571,24 @@ ranbooster_handle_rus(void *args)
                         num_prbs = data_sec_hdr_cpy.fields.num_prbu;
                     }
 
+                    //assert(cached_packets[ru_port_id][symbol][subframe][slot][ru_idx] == NULL);
+                    if (cached_packets[ru_port_id][symbol][subframe][slot][ru_idx] != NULL) {
+                        printf("RU %d: This looks wrong for RU port %d, symbol %d, subframe %d and slot %d\n", ru_idx, ru_port_id, symbol, subframe, slot);
+                        // printf("The number of cached packets is %d\n", rte_atomic32_read(&cached_packets_num[ru_port_id][symbol][subframe][slot]));
+                        // rte_atomic32_set(&cached_packets_num[ru_port_id][symbol][subframe][slot], 0);
+                        // for (int w = 0; w < config->num_rus; w++) {
+                        //     if (cached_packets[ru_port_id][symbol][subframe][slot][w] == NULL) {
+                        //         printf("RU %d is NULL\n", w);
+                        //     } else {
+                        //         printf("RU %d is not NULL\n", w);
+                        //         rte_pktmbuf_free(cached_packets[ru_port_id][symbol][subframe][slot][w]);
+                        //         cached_packets[ru_port_id][symbol][subframe][slot][w] = NULL;
+                        //     }
+                        // }
+
+                        //abort();
+                    }
+
                     cached_packets[ru_port_id][symbol][subframe][slot][ru_idx] = buf;
 
                     rte_atomic32_inc(&cached_packets_num[ru_port_id][symbol][subframe][slot]);
@@ -569,10 +597,12 @@ ranbooster_handle_rus(void *args)
                     // For this to be true, the counter should be equal to the number of RUs
                     // Note: We do not consider losses currently
                     int32_t value = rte_atomic32_read(&cached_packets_num[ru_port_id][symbol][subframe][slot]);
+
                     if (value == config->num_rus) {
 
                         rte_atomic32_set(&cached_packets_num[ru_port_id][symbol][subframe][slot], 0);
 
+     
                         if (config->num_workers > 0 && ru_port_id < MAX_PDSCH_PUSCH_PORT) {
                             // Push the processing to the worker threads, if possible
                             int worker_id = ru_port_id % (config->num_workers + 1);
@@ -582,7 +612,7 @@ ranbooster_handle_rus(void *args)
                                 assert(rte_ring_enqueue_burst(worker_ring, (void **)cached_packets[ru_port_id][symbol][subframe][slot], config->num_rus, NULL) == config->num_rus);
                             } else {
                                 process_pkts(cached_packets[ru_port_id][symbol][subframe][slot], config->num_rus, ru_port_id < MAX_PDSCH_PUSCH_PORT, num_prbs, config, 0);
-                            }
+                            } 
                         } else {
                             // Process the packet locally
                             process_pkts(cached_packets[ru_port_id][symbol][subframe][slot], config->num_rus, ru_port_id < MAX_PDSCH_PUSCH_PORT, num_prbs, config, 0);
@@ -613,7 +643,9 @@ process_packets_worker(void *args)
     int nb_rx = 0;
     int nb_tx = 0;
 
-    set_sched_fifo();
+    // set_sched_fifo();
+
+    printf("Worker %d started\n", wconfig->worker_id);
 
     while (true) {
         nb_tx = rte_ring_dequeue_burst(du_ring, (void **)tx_bufs, TX_BURST_SIZE, NULL);
@@ -628,7 +660,6 @@ process_packets_worker(void *args)
             process_pkts(bufs, mb_config->num_rus, true, 273, mb_config, wconfig->worker_id + 1);
         }
     }
-    
 }
 
 
@@ -636,18 +667,14 @@ int
 start_middlebox(void *args) 
 {
     struct middlebox_config *config = args;
-    set_sched_fifo();
+    // set_sched_fifo();
 
     int target_core = 0;
 
     while (true) {
         ranbooster_handle_du(args, target_core);
-        target_core = (target_core + 1) % (config->num_workers + 1);
-
+        target_core = ((target_core + 1) % (config->num_workers + 1));
         ranbooster_handle_rus(args);
-
-
-
     }
     return 0;
 }
@@ -729,13 +756,13 @@ main(int argc, char *argv[]) {
         }
 
         config.ru_configs[ru_idx].mbuf_pool_clone = rte_pktmbuf_pool_create(pool_name_clone, NUM_MBUFS,
-            MBUF_CACHE_SIZE, 0, 2 * RTE_PKTMBUF_HEADROOM + 100, SOCKET_ID_ANY);
+            MBUF_CACHE_SIZE, 0, 2 * RTE_PKTMBUF_HEADROOM, SOCKET_ID_ANY);
         if (config.ru_configs[ru_idx].mbuf_pool_clone == NULL) {
             rte_exit(EXIT_FAILURE, "Cannot create mbuf pool %s\n", pool_name);
         }
             
 
-        if (port_init(config.ru_configs[ru_idx].nic_port_id, config.ru_configs[ru_idx].mbuf_pool, 1) != 0)
+        if (port_init(config.ru_configs[ru_idx].nic_port_id, config.ru_configs[ru_idx].mbuf_pool, num_lcores) != 0)
             rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu16 "\n", config.ru_configs[ru_idx].nic_port_id);
 
         printf("Initialized port %d for RU%d\n", config.ru_configs[ru_idx].nic_port_id, ru_idx+1);
@@ -762,7 +789,7 @@ main(int argc, char *argv[]) {
         start_middlebox(&config);
     } else {
 
-        printf("Multi-core config is used.\n");
+        printf("Multi-core config with %d workers is used.\n", config.num_workers);
         
         char ring_name[32];
 
@@ -795,7 +822,7 @@ main(int argc, char *argv[]) {
             worker_configs[i].worker_id = i;
             worker_configs[i].ru_ring = worker_ru_rings[i];
             worker_configs[i].du_ring = worker_du_rings[i];        
-            rte_eal_remote_launch(process_packets_worker, &worker_configs, lcore_id);
+            rte_eal_remote_launch(process_packets_worker, &worker_configs[i], lcore_id);
             lcore_id = rte_get_next_lcore(lcore_id, 1, 0);
         }
 
