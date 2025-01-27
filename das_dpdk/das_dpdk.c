@@ -283,7 +283,37 @@ _handle_du_burst(struct middlebox_config *config, struct rte_mbuf **mx_bufs, int
 
             // Check if this was going to the middlebox
             if (rte_is_same_ether_addr(&config->middlebox_addr, &eth_hdr->dst_addr)) {
-                if (ecpri_message_type == ECPRI_RT_CONTROL_DATA || ecpri_message_type == ECPRI_IQ_DATA) {
+                if (ecpri_message_type == ECPRI_RT_CONTROL_DATA) {
+
+                    for (int i = 1; i < config->num_rus; i++) {
+                        struct rte_mbuf *copy = rte_pktmbuf_copy(buf, buf->pool, 0, buf->pkt_len);
+                        assert(copy != NULL);
+
+                        struct rte_ether_hdr *eth = rte_pktmbuf_mtod(copy, struct rte_ether_hdr *);
+
+                        rte_ether_addr_copy(&config->ru_configs[i].ru_addr, &eth->dst_addr);
+                        rte_ether_addr_copy(&config->ru_configs[i].ru_du_addr, &eth->src_addr);
+
+                        if (buf->ol_flags & RTE_MBUF_F_RX_VLAN) {
+                            copy->ol_flags |= RTE_MBUF_F_TX_VLAN;
+                            copy->vlan_tci = config->ru_configs[i].vlan;
+                        }
+
+                        mx_tx_bufs[mx_tx_idx++] = copy;
+                    }
+
+                    rte_ether_addr_copy(&config->ru_configs[0].ru_addr, &eth_hdr->dst_addr);
+                    rte_ether_addr_copy(&config->ru_configs[0].ru_du_addr, &eth_hdr->src_addr);
+
+                    eth_hdr->ether_type = rte_be_to_cpu_16(RTE_ETHER_TYPE_ECPRI);
+
+                    if (buf->ol_flags & RTE_MBUF_F_RX_VLAN) {
+                        buf->ol_flags |= RTE_MBUF_F_TX_VLAN;
+                        buf->vlan_tci = config->ru_configs[0].vlan;
+                    }
+
+                    mx_tx_bufs[mx_tx_idx++] = buf;
+                } else if (ecpri_message_type == ECPRI_IQ_DATA) {
 
                     rte_pktmbuf_adj(buf, (uint16_t)sizeof(struct rte_ether_hdr));
 
@@ -516,6 +546,8 @@ process_pkts(struct rte_mbuf **ul_pkts,
     return 0;
 }
 
+int num_errors = 0;
+
 int
 ranbooster_handle_rus(void *args)
 {
@@ -573,19 +605,22 @@ ranbooster_handle_rus(void *args)
 
                     //assert(cached_packets[ru_port_id][symbol][subframe][slot][ru_idx] == NULL);
                     if (cached_packets[ru_port_id][symbol][subframe][slot][ru_idx] != NULL) {
-                        printf("RU %d: This looks wrong for RU port %d, symbol %d, subframe %d and slot %d\n", ru_idx, ru_port_id, symbol, subframe, slot);
+                        //printf("RU %d: This looks wrong for RU port %d, symbol %d, subframe %d and slot %d\n", ru_idx, ru_port_id, symbol, subframe, slot);
                         // printf("The number of cached packets is %d\n", rte_atomic32_read(&cached_packets_num[ru_port_id][symbol][subframe][slot]));
-                        // rte_atomic32_set(&cached_packets_num[ru_port_id][symbol][subframe][slot], 0);
-                        // for (int w = 0; w < config->num_rus; w++) {
-                        //     if (cached_packets[ru_port_id][symbol][subframe][slot][w] == NULL) {
-                        //         printf("RU %d is NULL\n", w);
-                        //     } else {
-                        //         printf("RU %d is not NULL\n", w);
-                        //         rte_pktmbuf_free(cached_packets[ru_port_id][symbol][subframe][slot][w]);
-                        //         cached_packets[ru_port_id][symbol][subframe][slot][w] = NULL;
-                        //     }
-                        // }
-
+                        rte_atomic32_set(&cached_packets_num[ru_port_id][symbol][subframe][slot], 0);
+                        for (int w = 0; w < config->num_rus; w++) {
+                            if (cached_packets[ru_port_id][symbol][subframe][slot][w] == NULL) {
+                                //printf("RU %d is NULL\n", w);
+                            } else {
+                                //printf("RU %d is not NULL\n", w);
+                                rte_pktmbuf_free(cached_packets[ru_port_id][symbol][subframe][slot][w]);
+                                cached_packets[ru_port_id][symbol][subframe][slot][w] = NULL;
+                            }
+                        }
+                        num_errors++;
+                        if (num_errors % 1000 == 0) {
+                            printf("Number of errors is %d\n", num_errors);
+                        }
                         //abort();
                     }
 
