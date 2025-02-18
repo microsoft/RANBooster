@@ -434,60 +434,60 @@ process_pkts(struct rte_mbuf **ul_pkts,
     } else {
         // No compression, so directly use the IQ samples buffer of the first RU
         iq_sum_ptr = rte_pktmbuf_mtod_offset(ul_pkts[0], void *, IQ_OFFSET);
-        }
+    }
 
-        for (int id = 0; id < config->num_rus; id++) {
+    for (int id = 0; id < config->num_rus; id++) {
                     
-            // If there is compression (only for RU ports < 4), decompress them
-            if (is_compressed) {
-                struct xranlib_decompress_request dec_req = {0};
-                dec_req.data_in = rte_pktmbuf_mtod_offset(ul_pkts[id], void *,
-                                    IQ_OFFSET);
-                dec_req.numRBs = num_prbs;
-                dec_req.numDataElements = 24;
-                dec_req.compMethod = XRAN_COMPMETHOD_BLKFLOAT;
-                dec_req.iqWidth = IQ_BIT_WIDTH_COMPRESSED;
-                dec_req.reMask = 0xfff;
-                dec_req.csf = 0;
-                dec_req.ScaleFactor = 1;
+        // If there is compression (only for RU ports < 4), decompress them
+        if (is_compressed) {
+            struct xranlib_decompress_request dec_req = {0};
+            dec_req.data_in = rte_pktmbuf_mtod_offset(ul_pkts[id], void *,
+                                IQ_OFFSET);
+            dec_req.numRBs = num_prbs;
+            dec_req.numDataElements = 24;
+            dec_req.compMethod = XRAN_COMPMETHOD_BLKFLOAT;
+            dec_req.iqWidth = IQ_BIT_WIDTH_COMPRESSED;
+            dec_req.reMask = 0xfff;
+            dec_req.csf = 0;
+            dec_req.ScaleFactor = 1;
                         
-                // Compressed size
-                dec_req.len = num_prbs * (((IQ_BIT_WIDTH_COMPRESSED * 2 * NUM_SUBCARRIERS_PRB) / 8) + 1);
+            // Compressed size
+            dec_req.len = num_prbs * (((IQ_BIT_WIDTH_COMPRESSED * 2 * NUM_SUBCARRIERS_PRB) / 8) + 1);
 
-                struct xranlib_decompress_response dec_resp = {0};
-                dec_resp.data_out = (int16_t *)iq_buffer[out_port_idx][id];
-                dec_resp.len = num_prbs * ((IQ_BIT_WIDTH_UNCOMPRESSED * 2 * NUM_SUBCARRIERS_PRB) / 8);
+            struct xranlib_decompress_response dec_resp = {0};
+            dec_resp.data_out = (int16_t *)iq_buffer[out_port_idx][id];
+            dec_resp.len = num_prbs * ((IQ_BIT_WIDTH_UNCOMPRESSED * 2 * NUM_SUBCARRIERS_PRB) / 8);
                 
-                int res = xranlib_decompress(&dec_req, &dec_resp);
+            int res = xranlib_decompress(&dec_req, &dec_resp);
 
-                assert(res == 0);
-            }
-                    
-            if (id > 0) {
-                // Add the IQ samples of the new buffer
-                int16_t *iq_sum = iq_sum_ptr;
-                int16_t *iq_sum2;
-                if (is_compressed) {
-                    iq_sum2 = (int16_t *)iq_buffer[out_port_idx][id];
-                } else {
-                    iq_sum2 = rte_pktmbuf_mtod_offset(ul_pkts[id], void *,
-                        sizeof(struct rte_ether_hdr) + sizeof(struct xran_ecpri_hdr) + sizeof(struct radio_app_common_hdr) + 
-                        sizeof(struct data_section_hdr) + sizeof(struct data_section_compression_hdr));
-                }
-                int num_iq = num_prbs * NUM_SUBCARRIERS_PRB * 2;
-                #define assert__(x) for ( ; !(x) ; assert(x) )                          
-#if defined(__AVX512F__)
-                sum_arrays_avx512(iq_sum, iq_sum2, num_iq);
-#else
-                for (int iq_idx = 0; iq_idx < num_iq; iq_idx++) {
-                    iq_sum[iq_idx] += iq_sum2[iq_idx];
-                }
-#endif
-                bufs_to_be_freed[id] = ul_pkts[id];
-                num_to_free[id]++;
-                ul_pkts[id] = NULL;
-            }
+            assert(res == 0);
         }
+                    
+        // Add the IQ samples of the new buffer
+        int16_t *iq_sum = iq_sum_ptr;
+        int16_t *iq_sum2;
+        if (is_compressed) {
+            iq_sum2 = (int16_t *)iq_buffer[out_port_idx][id];
+        } else {
+            iq_sum2 = rte_pktmbuf_mtod_offset(ul_pkts[id], void *,
+                sizeof(struct rte_ether_hdr) + sizeof(struct xran_ecpri_hdr) + sizeof(struct radio_app_common_hdr) + 
+                sizeof(struct data_section_hdr) + sizeof(struct data_section_compression_hdr));
+        }
+        int num_iq = num_prbs * NUM_SUBCARRIERS_PRB * 2;
+        #define assert__(x) for ( ; !(x) ; assert(x) )                          
+#if defined(__AVX512F__)
+        sum_arrays_avx512(iq_sum, iq_sum2, num_iq);
+#else
+        for (int iq_idx = 0; iq_idx < num_iq; iq_idx++) {
+            iq_sum[iq_idx] += iq_sum2[iq_idx];
+        }
+#endif
+        if (id > 0) {
+            bufs_to_be_freed[id] = ul_pkts[id];
+            num_to_free[id]++;
+            ul_pkts[id] = NULL;
+        }
+    }
 
         struct rte_mbuf *buf_out = ul_pkts[0];
 
@@ -598,7 +598,7 @@ ranbooster_handle_rus(void *args)
                     int num_prbs = 0;
 
                     if (ru_port_id < MAX_PDSCH_PUSCH_PORT) {
-                        num_prbs = 273;
+                        num_prbs = NUM_PRB;
                     } else {
                         num_prbs = data_sec_hdr_cpy.fields.num_prbu;
                     }
@@ -692,7 +692,7 @@ process_packets_worker(void *args)
             assert(nb_rx == 0);
             continue;
         } else {
-            process_pkts(bufs, mb_config->num_rus, true, 273, mb_config, wconfig->worker_id + 1);
+            process_pkts(bufs, mb_config->num_rus, true, NUM_PRB, mb_config, wconfig->worker_id + 1);
         }
     }
 }
