@@ -30,7 +30,7 @@
 #define TX_BURST_SIZE 16
 #define TX_OUT_BUFS 192
 
-#define MAX_NUM_RUS 5
+#define MAX_NUM_RUS 9
 
 #define MAX_OUT_PORTS MAX_NUM_RUS
 
