@@ -13,7 +13,7 @@
 
 #define VLAN_VID_MASK    0x0FFF
 
-__u8 booster_mac_addr[] = {0xe2, 0x53, 0x8d, 0x8f, 0xa4, 0x6b};
+__u8 booster_mac_addr[] = {0x00, 0x00, 0x11, 0x11, 0x22, 0x22};
 
 __u8 broadcast[] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 
@@ -31,7 +31,14 @@ struct {
     __uint(max_entries, 1);          
     __type(key, __u32);              
     __type(value, __u16); 
-} vlan SEC(".maps");
+} ru_vlan SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);          
+    __type(key, __u32);              
+    __type(value, __u16); 
+} du_vlan SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
@@ -69,7 +76,7 @@ static __inline int bpf_memcmp(const void *s1, const void *s2, size_t n) {
     return 0; // Return 0 if equal
 }
 
-SEC("xdp.frags")
+SEC("xdp")
 int xdp_prb_mon(struct xdp_md *ctx) {
 
     struct vlan_hdr *vlan_h = NULL;
@@ -106,8 +113,13 @@ int xdp_prb_mon(struct xdp_md *ctx) {
 	    return XDP_DROP;
     }
 
-    __u16 *vlan_num = bpf_map_lookup_elem(&vlan, &key);
-    if (!vlan_num) {
+    __u16 *du_vlan_num = bpf_map_lookup_elem(&du_vlan, &key);
+    if (!du_vlan_num) {
+	    return XDP_DROP;
+    }
+
+    __u16 *ru_vlan_num = bpf_map_lookup_elem(&ru_vlan, &key);
+    if (!ru_vlan_num) {
 	    return XDP_DROP;
     }
 
@@ -126,12 +138,13 @@ int xdp_prb_mon(struct xdp_md *ctx) {
 
         vlan_id = vlan_tci & VLAN_VID_MASK;
 
-        if (vlan_id != *vlan_num) {
+        if (vlan_id != *du_vlan_num) {
             return XDP_DROP;
         }
         
         next_hdr = (__u8 *)next_hdr + sizeof(struct vlan_hdr);
         ether_type = bpf_ntohs(vlan_h->h_vlan_encapsulated_proto);
+
     } else if (ether_type == 44798) { // Packets we get from loopback can be dropped
         return XDP_DROP;   
     }
@@ -153,6 +166,16 @@ int xdp_prb_mon(struct xdp_md *ctx) {
             // Change the MAC address to send to the correct destination
             __builtin_memcpy(eh->h_dest, ru_mac, ETH_ALEN);
             __builtin_memcpy(eh->h_source, du_mac, ETH_ALEN);
+
+            if (vlan_h) {
+                if ((void *)(vlan_h + 1) > data_end) {                        
+                    return XDP_DROP;
+                }
+                vlan_tci = (vlan_tci & 0xF000) | (*ru_vlan_num & 0x0FFF);
+                vlan_h->h_vlan_TCI = bpf_htons(vlan_tci);
+            }
+
+            return XDP_TX;
 
             if (ecpri_message_type == ECPRI_RT_CONTROL_DATA) { // If this is a C-plane message
                 return XDP_TX;
@@ -190,6 +213,10 @@ int xdp_prb_mon(struct xdp_md *ctx) {
                 data_sec_hdr_cpy.fields.all_bits = bpf_ntohl(data_sec_hdr->fields.all_bits);
                 num_prbs = data_sec_hdr_cpy.fields.num_prbu;
 
+                if (num_prbs == 0) {
+                    num_prbs = 273;
+                }
+
                 next_hdr = (__u8 *)next_hdr + sizeof(struct data_section_hdr);
 
                 struct data_section_compression_hdr *cmp_header = (struct data_section_compression_hdr *)next_hdr;
@@ -202,9 +229,10 @@ int xdp_prb_mon(struct xdp_md *ctx) {
 
                 struct prb_stats_event *e = bpf_ringbuf_reserve(&comp_load, sizeof(struct prb_stats_event), 0);
 
-                if (!e)
+                if (!e) {
                     return XDP_TX;
-
+                }
+                    
                 for (int rb_id = 0; rb_id < MAX_NUM_RBS; rb_id++) {
                     
                     if (rb_id >= num_prbs) {
@@ -237,4 +265,4 @@ int xdp_prb_mon(struct xdp_md *ctx) {
     return XDP_DROP;
 }
 
-char _license[] SEC("license") = "MIT";
+char _license[] SEC("license") = "GPL";

@@ -8,7 +8,7 @@
 #define ECPRI_RT_CONTROL_DATA \
   0x02                          // eCPRI Message Type for Real-Time Control Data
 
-#define NUM_PRB (273)
+#define NUM_PRB (106)
 #define MAX_PDSCH_PUSCH_PORT (4)
 
 #define NUM_SYMBOLS (14)

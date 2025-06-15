@@ -27,7 +27,7 @@
 #define BATCH_SIZE 64
 
 #define NUM_FRAMES_PER_SOCKET (8192)
-#define NUM_SOCKETS (2)
+#define NUM_SOCKETS (3)
 #define NUM_FRAGMENTS (1)
 #define NUM_FRAMES (NUM_FRAMES_PER_SOCKET * NUM_SOCKETS)
 
@@ -84,7 +84,12 @@ struct xsk_pkt_fragment {
 struct xsk_pkt_fragment cached_packets[NUM_SOCKETS][NUM_ANTENNA_PORTS][NUM_SYMBOLS][NUM_SUBFRAMES][NUM_SLOTS][NUM_FRAGMENTS] = {0}; 
 int cached_packets_num[NUM_ANTENNA_PORTS][NUM_SYMBOLS][NUM_SUBFRAMES][NUM_SLOTS] = {0}; 
 
-struct xsk_socket_info xsk_info[NUM_SOCKETS] = {0};
+//struct xsk_socket_info xsk_info[NUM_SOCKETS] = {0};
+
+struct xsk_info {
+    struct xsk_socket_info xsk_info[NUM_SOCKETS];
+    int num_rus;
+};
 
 static void set_sched_fifo(int priority) 
 {
@@ -283,7 +288,7 @@ void tx_free_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_frags
 
 }
 
-void process_rcvd_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_frags, int num_frags)
+void process_rcvd_pkt(struct xsk_info *xinfo, int socket_to_process, struct xsk_pkt_fragment *pkt_frags, int num_frags, int num_rus)
 {
     struct xsk_pkt_fragment frags_to_be_freed[NUM_SOCKETS][BATCH_SIZE] = {0};
     struct xsk_pkt_fragment frags_to_be_sent[BATCH_SIZE];
@@ -295,6 +300,8 @@ void process_rcvd_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_
     uint16_t ether_type;
     uint16_t vlan_tci = 0;
     uint16_t vlan_id = 0;
+
+    struct xsk_socket_info *xsk = &xinfo->xsk_info[socket_to_process];
 
     // Here we assume that all the fragments of the packet follow the fragment with the header.
     // As such, we can re-use the parsed header fields to store the other fragments
@@ -368,6 +375,23 @@ void process_rcvd_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_
             fragment_seq++;
         }
 
+        if (cached_packets[xsk->id][ru_port_id][symbol][subframe][slot][fragment_seq].iq_ptr_head != NULL) {
+                        //printf("RU %d: This looks wrong for RU port %d, symbol %d, subframe %d and slot %d\n", ru_idx, ru_port_id, symbol, subframe, slot);
+                        // printf("The number of cached packets is %d\n", rte_atomic32_read(&cached_packets_num[ru_port_id][symbol][subframe][slot]));
+            cached_packets_num[ru_port_id][symbol][subframe][slot] = 0;
+
+
+            for (int k = 0; k < num_rus; k++) {
+                if (cached_packets[k][ru_port_id][symbol][subframe][slot][0].iq_ptr_head == NULL) {
+
+                } else {
+                    frags_to_be_freed[k][num_to_free[k]++] = cached_packets[k][ru_port_id][symbol][subframe][slot][0];
+                    cached_packets[k][ru_port_id][symbol][subframe][slot][0].iq_ptr_head = NULL;
+                }
+            }
+        
+        }
+
         // Cache the packet and increment the counter
         cached_packets[xsk->id][ru_port_id][symbol][subframe][slot][fragment_seq] = pkt_frags[i];
         cached_packets_num[ru_port_id][symbol][subframe][slot]++;
@@ -375,7 +399,7 @@ void process_rcvd_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_
         // If we have all the expected fragments, then time to modify and send out.
         // For this to be true, the counter should be equal to the number of sockets times the number of fragments per socket
         // Note: We do not consider losses currently
-        if (cached_packets_num[ru_port_id][symbol][subframe][slot] == NUM_FRAGMENTS * NUM_SOCKETS) {
+        if (cached_packets_num[ru_port_id][symbol][subframe][slot] == NUM_FRAGMENTS * num_rus) {
 
             int num_prb = cached_packets[xsk->id][ru_port_id][symbol][subframe][slot][0].num_prb;
             void *iq_sum_ptr;
@@ -387,7 +411,7 @@ void process_rcvd_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_
                 iq_sum_ptr = cached_packets[0][ru_port_id][symbol][subframe][slot][0].iq_ptr_head;
             }
 
-            for (int sock_id = 0; sock_id < NUM_SOCKETS; sock_id++) {
+            for (int sock_id = 0; sock_id < num_rus; sock_id++) {
                 if (NUM_FRAGMENTS == 1) {
                     // If there is compression (only for RU ports < 4), decompress them
                     if (ru_port_id < MAX_PDSCH_PUSCH_PORT) {
@@ -467,49 +491,54 @@ void process_rcvd_pkt(struct xsk_socket_info *xsk, struct xsk_pkt_fragment *pkt_
             }            
 
             cached_packets_num[ru_port_id][symbol][subframe][slot] = 0;
+            for (int k = 0; k < num_rus; k++) {
+                cached_packets[k][ru_port_id][symbol][subframe][slot][0].iq_ptr_head = NULL;
+                cached_packets[k][ru_port_id][symbol][subframe][slot][0].num_prb = 0;
+                cached_packets[k][ru_port_id][symbol][subframe][slot][0].ru_port_id = 0;
+            }
             // frags_to_be_sent[num_to_send++] = cached_packets[0][ru_port_id][symbol][subframe][slot][0];
         }
     }
 
     for (int sock_id = 1; sock_id < NUM_SOCKETS; sock_id++) {
         if (num_to_free[sock_id] > 0) {
-            alloc = xsk_ring_prod__reserve(&xsk_info[sock_id].umem->fq, num_to_free[sock_id], &idx_fq);
+            alloc = xsk_ring_prod__reserve(&xinfo->xsk_info[sock_id].umem->fq, num_to_free[sock_id], &idx_fq);
 
             assert(alloc == num_to_free[sock_id]);
 
             for (int idx = 0; idx < num_to_free[sock_id]; idx++) {
-                *xsk_ring_prod__fill_addr(&xsk_info[sock_id].umem->fq, idx_fq++) = frags_to_be_freed[sock_id][idx].addr;
+                *xsk_ring_prod__fill_addr(&xinfo->xsk_info[sock_id].umem->fq, idx_fq++) = frags_to_be_freed[sock_id][idx].addr;
             }
 
-            xsk_ring_prod__submit(&xsk_info[sock_id].umem->fq, num_to_free[sock_id]);
+            xsk_ring_prod__submit(&xinfo->xsk_info[sock_id].umem->fq, num_to_free[sock_id]);
         }
     }
 
-    tx_free_pkt(&xsk_info[0], frags_to_be_sent, num_to_send);
+    tx_free_pkt(&xinfo->xsk_info[0], frags_to_be_sent, num_to_send);
 }
 
-void rx_packets(struct xsk_socket_info *xsk)
+void rx_packets(struct xsk_info *xinfo, int socket_to_process, int num_rus)
 {
     static bool new_packet = true;
     uint32_t idx_rx = 0;
     struct xsk_pkt_fragment xsk_pkt_frags[BATCH_SIZE] = {0};
 
-    int rcvd = xsk_ring_cons__peek(&xsk->rx, BATCH_SIZE, &idx_rx);
+    int rcvd = xsk_ring_cons__peek(&xinfo->xsk_info[socket_to_process].rx, BATCH_SIZE, &idx_rx);
     
     if (!rcvd) 
         return;
 
     for (int i = 0; i < rcvd; i++) {
         // Get the next descriptor from the RX ring of the socket
-        const struct xdp_desc *desc = xsk_ring_cons__rx_desc(&xsk->rx, idx_rx++);
+        const struct xdp_desc *desc = xsk_ring_cons__rx_desc(&xinfo->xsk_info[socket_to_process].rx, idx_rx++);
 
         // Get the data from the ring
-        xsk_pkt_frags[i].data = xsk_umem__get_data(xsk->umem->buffer, desc->addr);
+        xsk_pkt_frags[i].data = xsk_umem__get_data(xinfo->xsk_info[socket_to_process].umem->buffer, desc->addr);
         xsk_pkt_frags[i].addr = desc->addr;
         xsk_pkt_frags[i].size = desc->len;
         xsk_pkt_frags[i].new_packet = new_packet;
 
-        xsk_pkt_frags[i].xsk = xsk;
+        xsk_pkt_frags[i].xsk = &xinfo->xsk_info[socket_to_process];
 
         // Mark this as a new packet or not
         new_packet = false;
@@ -520,10 +549,10 @@ void rx_packets(struct xsk_socket_info *xsk)
     }
 
     // Release all the received slots from the RX ring of the socket
-    xsk_ring_cons__release(&xsk->rx, rcvd);
+    xsk_ring_cons__release(&xinfo->xsk_info[socket_to_process].rx, rcvd);
 
     // Process the received packets
-    process_rcvd_pkt(xsk, xsk_pkt_frags, rcvd);
+    process_rcvd_pkt(xinfo, socket_to_process, xsk_pkt_frags, rcvd, num_rus);
 
 }
 
@@ -531,6 +560,7 @@ int main(int argc, char **argv) {
 
     struct rlimit rlim = {RLIM_INFINITY, RLIM_INFINITY};
     uint64_t pbuffer_size;
+    struct xsk_info xinfo = {0};
     
     DECLARE_LIBBPF_OPTS(bpf_object_open_opts, opts);
 	DECLARE_LIBXDP_OPTS(xdp_program_opts, xdp_opts, 0);
@@ -540,12 +570,8 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    const char *ifname1 = argv[1];
-    const char *map_name1 = argv[2];
-    const char *ifname2 = argv[3];
-    const char *map_name2 = argv[4];
-    const char *du_mac = argv[5];
-    const char *ranbooster_mac = argv[6];
+    const char *du_mac = argv[1];
+    const char *ranbooster_mac = argv[2];
 
     if (!parse_mac_address(du_mac, du_mac_addr)) {
         exit(-1);
@@ -554,11 +580,18 @@ int main(int argc, char **argv) {
     if (!parse_mac_address(ranbooster_mac, booster_mac_addr)) {
         exit(-1);
     }
+    
+    int num_rus = (argc - 2) / 2;
+
+    printf("Need to configure %d RUs\n", num_rus);
+
+    xinfo.num_rus = num_rus;
+
     struct xsk_umem_info umem[NUM_SOCKETS] = {0};
 
     struct xsk_umem_config umem_config = {
-        .fill_size = XSK_RING_PROD__DEFAULT_NUM_DESCS * NUM_SOCKETS,
-        .comp_size = XSK_RING_CONS__DEFAULT_NUM_DESCS * NUM_SOCKETS,
+        .fill_size = XSK_RING_PROD__DEFAULT_NUM_DESCS,
+        .comp_size = XSK_RING_CONS__DEFAULT_NUM_DESCS,
         .frame_size = FRAME_SIZE,
         .frame_headroom = XSK_UMEM__DEFAULT_FRAME_HEADROOM,
         .flags = 0,
@@ -571,14 +604,19 @@ int main(int argc, char **argv) {
 	}
 
     set_sched_fifo(90);
-    pin_thread_to_core(30); 
+    //pin_thread_to_core(30); 
 
     printf("Set rlimit to unlimited\n"); 
 
 	pbuffer_size = NUM_FRAMES * FRAME_SIZE;
 
-    for (int i = 0; i < NUM_SOCKETS; i++) {
+    int arg_idx = 3;
 
+    for (int i = 0; i < xinfo.num_rus; i++) {
+
+        const char *ifname = argv[arg_idx];
+        const char *map_name = argv[arg_idx + 1];
+        arg_idx += 2;
 
 	    if (posix_memalign(&umem[i].buffer,
 			   getpagesize(),
@@ -599,44 +637,44 @@ int main(int argc, char **argv) {
 
         printf("xsk_umem__create() for umem %d: Success\n", i);
 
-        xsk_info[i].umem = &umem[i];
-        xsk_info[i].id = i;
+        xinfo.xsk_info[i].umem = &umem[i];
+        xinfo.xsk_info[i].id = i;
+
+        if (setup_xsk_socket(&xinfo.xsk_info[i], ifname, 0, map_name) < 0) {
+            abort();
+        }
+
+        printf("Listening on %s for map %s with AF_XDP\n", ifname, map_name);
     }
 
-    // Setup XDP sockets for both interfaces
-    if (setup_xsk_socket(&xsk_info[0], ifname1, 0, map_name1) < 0 ||
-        setup_xsk_socket(&xsk_info[1], ifname2, 0, map_name2) < 0) {
-        return 1;
+    struct pollfd fds[NUM_SOCKETS] = {0};
+
+    for (int i = 0; i < xinfo.num_rus; i++) {
+        fds[i].fd = xsk_socket__fd(xinfo.xsk_info[i].xsk);
+        fds[i].events = POLLIN;
     }
-
-    printf("Listening on %s and %s with AF_XDP\n", ifname1, ifname2);
-
-    // Event loop
-    struct pollfd fds[] = {
-        { .fd = xsk_socket__fd(xsk_info[0].xsk), .events = POLLIN },
-        { .fd = xsk_socket__fd(xsk_info[1].xsk), .events = POLLIN },
-    };
 
     while (1) {
-        int poll_ret = poll(fds, 2, 1000);
+        int poll_ret = poll(fds, xinfo.num_rus, 1000);
         if (poll_ret < 0) {
             perror("poll");
             break;
         }
 
         if (poll_ret > 0) {
-            if (fds[0].revents & POLLIN)
-                rx_packets(&xsk_info[0]);
-            if (fds[1].revents & POLLIN)
-                rx_packets(&xsk_info[1]);
+            for (int i = 0; i < xinfo.num_rus; i++) {
+                if (fds[i].revents & POLLIN) {
+                    rx_packets(&xinfo, i, xinfo.num_rus);
+                }
+            }
         }
     }
 
     // Cleanup
-    for (int i = 0; i < NUM_SOCKETS; i++) {
-        xsk_socket__delete(xsk_info[i].xsk);
+    for (int i = 0; i < xinfo.num_rus; i++) {
+        xsk_socket__delete(xinfo.xsk_info[i].xsk);
         xsk_umem__delete(umem[i].umem);
-        free(xsk_info[i].iq_buffer);
+        free(xinfo.xsk_info[i].iq_buffer);
         free(umem[i].buffer);
     }    
     return 0;

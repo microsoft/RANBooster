@@ -49,8 +49,6 @@ int process_prb_event(void *ctx, void *data, size_t data_sz) {
 
     stats->num_prbs_used += e->num_prbs_used;
     stats->total_num_prbs += e->total_num_prbs;
-
-    //printf("Total prbs %d and used prbs %d\n", e->total_num_prbs, e->num_prbs_used);
     return 0;
 }
 
