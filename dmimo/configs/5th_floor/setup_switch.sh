@@ -1,8 +1,12 @@
 #!/bin/bash
 
+
+ip link set eth2 vf 0 mac aa:bb:cc:11:22:33 spoofchk off
+
 echo 5 > /sys/class/net/eth0/device/sriov_numvfs
 
-ip link set dev enp75s0v1 address 86:4d:3b:02:0a:8c
+ip link set dev enp75s0v0 address 00:00:11:11:22:22
+ip link set dev enp75s0v1 address 00:00:11:11:22:22
 ip link set dev enp75s0v1 arp off
 
 # DU address for RU1
@@ -10,15 +14,11 @@ ip link set dev enp75s0v2 address 00:11:22:33:44:66
 # DU address for RU2
 ip link set dev enp75s0v3 address 66:44:33:22:11:00
 
-# Configure VF for DU
-ip link set enp75s0np0 vf 4 mac aa:bb:cc:11:22:33
-ip link set dev enp75s0v4 address aa:bb:cc:11:22:33
-
-ip link set dev enp75s0np0 mtu 9000
-ip link set dev enp75s0v0 mtu 9000
-ip link set dev enp75s0v1 mtu 9000
-ip link set dev enp75s0v2 mtu 9000
-ip link set dev enp75s0v3 mtu 9000
+ip link set dev enp75s0np0 mtu 3300
+ip link set dev enp75s0v0 mtu 3300
+ip link set dev enp75s0v1 mtu 3300
+ip link set dev enp75s0v2 mtu 3300
+ip link set dev enp75s0v3 mtu 3300
 
 sudo ip link add link enp75s0v0 name enp75s0v0.1 type vlan id 1
 sudo ip link add link enp75s0v0 name enp75s0v0.3 type vlan id 3

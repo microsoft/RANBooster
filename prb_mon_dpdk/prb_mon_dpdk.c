@@ -219,7 +219,7 @@ void* stats_thread_func(void* arg) {
 
         if (ul_count > 0) {
             double average_prbs = (double)total_ul_prbs / ul_count;
-            printf("Average UL PRBs used: %.2f\n", average_prbs);
+            //printf("Average UL PRBs used: %.2f\n", average_prbs);
 
             // Reset counters
             atomic_store(&total_ul_prbs_used, 0);

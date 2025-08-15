@@ -3,8 +3,8 @@ CLANG = clang
 BPF_CFLAGS = -O2 -g -Wall -target bpf
 
 # Compiler and flags for the user-space program
-CC = gcc
-USER_CFLAGS = -Wall -g  -O2
+CC = icx
+USER_CFLAGS = -Wall -g -O2
 
 LDFLAGS = -L/usr/lib -lbpf -lelf 
 LDFLAGS_RX_HANDLER = -L/usr/lib -L/usr/local/lib -L../ofh_comp -lofhcompress -lbpf -lelf -lxdp
@@ -43,7 +43,7 @@ $(USER_PROG): $(USER_SRC)
 
 # Compile the rx_handler program
 $(RX_HANDLER_PROG): $(RX_HANDLER_SRC)
-	$(CC) $(USER_CFLAGS) $(LDFLAGS_RX_HANDLER) -o $(RX_HANDLER_PROG) $(RX_HANDLER_SRC) $(INCLUDES)
+	$(CC) $(USER_CFLAGS) -o $(RX_HANDLER_PROG) $(RX_HANDLER_SRC) $(INCLUDES) $(LDFLAGS_RX_HANDLER)
 
 # Clean target to remove generated files
 clean:

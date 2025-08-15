@@ -30,9 +30,9 @@ int main(int argc, char **argv) {
     struct bpf_program *prog;
     struct bpf_map *map;
     int prog_fd, ifindex, ret;
-    uint16_t vlan;
+    uint16_t ru_vlan, du_vlan;
 
-    if (argc != 9) {
+    if (argc != 10) {
         fprintf(stderr, "Usage: %s <xdp_prog.o> <iface> <pin_name> <pin_map> <vlan> <ru_mac> <du_mac_middlebox> <du_mac_ru>\n", argv[0]);
         return 1;
     }
@@ -41,11 +41,11 @@ int main(int argc, char **argv) {
     iface = argv[2];      // Network interface name
     pin_path = argv[3];   // Path where the program should be pinned
     map_pin_path = argv[4]; // Path where the load map should be pinned
-    vlan = atoi(argv[5]); // vlan
+    ru_vlan = atoi(argv[5]); // RU vlan
     const char *ru_mac = argv[6]; // RU MAC address
     const char *du_mac_middlebox = argv[7]; // DU MAC address used at the DU side
     const char *du_mac_ru = argv[8]; // The DU MAC address configured at the RU that is controlled by the loaded program
-
+    du_vlan = atoi(argv[9]); // RU vlan
 
     // Get interface index
     ifindex = if_nametoindex(iface);
@@ -91,7 +91,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    map = bpf_object__find_map_by_name(obj, "vlan");
+    map = bpf_object__find_map_by_name(obj, "ru_vlan");
     if (!map) {
         fprintf(stderr, "Failed to find global variable map\n");
         bpf_object__close(obj);
@@ -100,7 +100,7 @@ int main(int argc, char **argv) {
 
     // Update the RU vlan variable value in the map
     int key = 0;
-    ret = bpf_map_update_elem(bpf_map__fd(map), &key, &vlan, BPF_ANY);
+    ret = bpf_map_update_elem(bpf_map__fd(map), &key, &ru_vlan, BPF_ANY);
     if (ret) {
         fprintf(stderr, "Failed to update global variable: %s\n", strerror(errno));
         bpf_object__close(obj);
@@ -165,6 +165,21 @@ int main(int argc, char **argv) {
     ret = bpf_map_update_elem(bpf_map__fd(map), &key, &ranbooster_du_mac_addr, BPF_ANY);
     if (ret) {
         fprintf(stderr, "Failed to update MAC address: %s\n", strerror(errno));
+        bpf_object__close(obj);
+        return 1;
+    }
+
+    map = bpf_object__find_map_by_name(obj, "du_vlan");
+    if (!map) {
+        fprintf(stderr, "Failed to find global variable map\n");
+        bpf_object__close(obj);
+        return 1;
+    }
+
+    // Update the DU vlan variable value in the map
+    ret = bpf_map_update_elem(bpf_map__fd(map), &key, &du_vlan, BPF_ANY);
+    if (ret) {
+        fprintf(stderr, "Failed to update global variable: %s\n", strerror(errno));
         bpf_object__close(obj);
         return 1;
     }
