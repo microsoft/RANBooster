@@ -1,0 +1,169 @@
+diff --git a/fhi_lib/lib/Makefile b/fhi_lib/lib/Makefile
+index d0c238c..432beaf 100644
+--- a/fhi_lib/lib/Makefile
++++ b/fhi_lib/lib/Makefile
+@@ -23,7 +23,13 @@ MYCUSTOMSPACE1='------------------------------------------------------------'
+ ##############################################################
+ #  Tools configuration
+ ##############################################################
+-ifeq ($(WIRELESS_SDK_TOOLCHAIN),icc)
++ifeq ($(WIRELESS_SDK_TOOLCHAIN), gcc)
++    CC  := gcc
++    CPP := g++
++    AS := as
++    AR := ar
++    LD := gcc
++else ifeq ($(WIRELESS_SDK_TOOLCHAIN),icc)
+     CC  := icc
+     CPP := icpc
+     AS := as
+@@ -136,6 +142,10 @@ CC_FLAGS += -std=gnu11 -Wall -Wno-deprecated-declarations  \
+ 	-Wimplicit-function-declaration \
+ 	-g -O3 -mcmodel=large
+ 
++ifeq ($(WIRELESS_SDK_TOOLCHAIN),gcc)
++CC_FLAGS += $(TARGET_PROCESSOR) -Wno-unused-function -Wno-intrinsic-promote -Wno-error
++endif
++
+ ifeq ($(WIRELESS_SDK_TOOLCHAIN),icc)
+ CC_FLAGS += -wd1786 -restrict
+ endif
+@@ -152,6 +162,10 @@ CPP_FLAGS := -D__STDC_LIMIT_MACROS -D__STDC_CONSTANT_MACROS -D_GNU_SOURCE -D_REE
+                   -falign-functions=16 \
+         -Werror -Wno-unused-variable -std=c++14 -mcmodel=large -fPIC
+ 
++ifeq ($(WIRELESS_SDK_TOOLCHAIN),gcc)
++CPP_FLAGS += $(TARGET_PROCESSOR) -Wno-unused-function -Wno-intrinsic-promote -Wno-error
++endif
++
+ ifeq ($(WIRELESS_SDK_TOOLCHAIN),icc)
+ CPP_FLAGS +=  -fp-model fast=2 -no-prec-div -no-prec-sqrt -fast-transcendentals -restrict
+ endif
+@@ -210,8 +224,8 @@ CPP_SNC_OBJTARGETS := $(addprefix $(PROJECT_OBJ_DIR)/,$(CPP_OBJS_SNC))
+ 
+ AS_OBJTARGETS := $(addprefix $(PROJECT_OBJ_DIR)/,$(AS_OBJS))
+ #-qopt-report=5 -qopt-matmul -qopt-report-phase=all
+-CPP_COMP       := -O3 -DNDEBUG  -fPIE -fasm-blocks
+-CPP_COMP_SNC   := -O3 -DNDEBUG -fPIE -fasm-blocks
++CPP_COMP       := -O3 -DNDEBUG  -fPIE
++CPP_COMP_SNC   := -O3 -DNDEBUG -fPIE
+ CC_FLAGS_FULL  := $(CC_FLAGS)  $(INC) $(DEF)
+ CPP_FLAGS_FULL := $(CPP_FLAGS) $(CPP_COMP) $(INC) $(DEF)
+ CPP_FLAGS_FULL_SNC := $(CPP_FLAGS) $(CPP_COMP_SNC) $(INC) $(DEF)
+diff --git a/fhi_lib/lib/src/xran_bfp_byte_packing_utils.hpp b/fhi_lib/lib/src/xran_bfp_byte_packing_utils.hpp
+index 483efb3..727d48f 100644
+--- a/fhi_lib/lib/src/xran_bfp_byte_packing_utils.hpp
++++ b/fhi_lib/lib/src/xran_bfp_byte_packing_utils.hpp
+@@ -27,6 +27,10 @@
+ #pragma once
+ #include <immintrin.h>
+ 
++#ifdef __GNUC__
++#define _mm256_and_epi64(a, b) _mm256_and_si256(a, b)
++#endif
++
+ namespace BlockFloatCompander
+ {
+   /// Define function signatures for byte packing functions
+diff --git a/fhi_lib/lib/src/xran_compression.cpp b/fhi_lib/lib/src/xran_compression.cpp
+index c35f7cd..f9d5c5e 100644
+--- a/fhi_lib/lib/src/xran_compression.cpp
++++ b/fhi_lib/lib/src/xran_compression.cpp
+@@ -52,6 +52,20 @@ struct xran_lib_compander_for_isa
+ {
+     xran_lib_compander_for_isa() {
+         if (gCpuCapability == -1) {
++#if defined(__GNUC__) && !defined(__INTEL_COMPILER)  // GCC or Clang
++            __builtin_cpu_init();
++
++#ifdef _BBLIB_SPR_
++            if (__builtin_cpu_supports("f16c")) {
++                gCpuCapability = 2;
++            } else
++#endif
++            if (__builtin_cpu_supports("avx512ifma")) {
++                gCpuCapability = 1;
++            } else {
++                gCpuCapability = 0;
++            }
++#else  // Intel compilers / MSVC with _may_i_use_cpu_feature
+ #ifdef _BBLIB_SPR_
+             if (_may_i_use_cpu_feature(_FEATURE_F16C)) {
+                 gCpuCapability = 2;
+@@ -62,6 +76,7 @@ struct xran_lib_compander_for_isa
+             } else {
+                 gCpuCapability = 0;
+             }
++#endif
+         }
+ 
+         printf("xran_lib_compander_for_isa: %d\n", gCpuCapability);
+diff --git a/fhi_lib/lib/src/xran_main.c b/fhi_lib/lib/src/xran_main.c
+index 256fa1d..d82574c 100644
+--- a/fhi_lib/lib/src/xran_main.c
++++ b/fhi_lib/lib/src/xran_main.c
+@@ -3838,7 +3838,12 @@ int32_t xran_spawn_workers(void)
+         }
+     }
+ 
+-    icx_cpu = _may_i_use_cpu_feature(_FEATURE_AVX512IFMA52);
++#if defined(__GNUC__) && !defined(__INTEL_COMPILER)  // GCC or Clang
++    __builtin_cpu_init();
++    icx_cpu = __builtin_cpu_supports("avx512ifma");
++#else  // Intel (ICX/ICC/MSVC compatible)
++     icx_cpu = _may_i_use_cpu_feature(_FEATURE_AVX512IFMA52);
++#endif
+ 
+     printf("ORAN operating mode: O-%s\n", (xran_get_syscfg_appmode() == ID_O_DU) ?"DU":"RU");
+     printf("  Num of configured cores: %d%s\n", total_num_cores, icx_cpu?" (Xeon SP Gen3 or later)":"");
+diff --git a/fhi_lib/lib/src/xran_mod_compression.cpp b/fhi_lib/lib/src/xran_mod_compression.cpp
+index c313beb..714bedb 100644
+--- a/fhi_lib/lib/src/xran_mod_compression.cpp
++++ b/fhi_lib/lib/src/xran_mod_compression.cpp
+@@ -21,6 +21,37 @@
+ #include "xran_compression.h"
+ #include "xran_fh_o_du.h"
+ 
++#ifdef __GNUC__
++/*
++ * Fallback implementation for 16-bit element-wise division on a 512-bit vector.
++ * AVX-512 does not provide a native integer divide intrinsic for 16-bit lanes,
++ * so use a scalar element-wise divide via a local buffer. This keeps existing
++ * call sites (which reference `_mm512_div_epi16`) unchanged.
++ */
++static inline __m512i _mm512_div_epi16(const __m512i src, const __m512i divisor)
++{
++    /* buffers must hold 32 int16_t elements (32 * 2 = 64 bytes) */
++    int16_t src_buf[32] __attribute__((aligned(64)));
++    int16_t div_buf[32] __attribute__((aligned(64)));
++    int16_t out_buf[32] __attribute__((aligned(64)));
++
++    /* store registers to memory */
++    _mm512_storeu_si512((void*)src_buf, src);
++    _mm512_storeu_si512((void*)div_buf, divisor);
++
++    /* divisor is expected to be set1 across lanes; read element 0 */
++    const int16_t unit = div_buf[0];
++
++    /* simple scalar per-element division (truncates toward zero like C integer division) */
++    for (int i = 0; i < 32; ++i)
++        out_buf[i] = src_buf[i] / unit;
++
++    /* load result back to register and return */
++    return _mm512_loadu_si512((const void*)out_buf);
++}
++
++#endif
++
+ #ifdef C_Module_Used
+ void
+ mod_compression_qpsk_c(int16_t *pData,int8_t *pOut,int16_t unit, int32_t nSc)
+@@ -637,7 +668,7 @@ byte_pack4b(const __m512i comp_data)
+                                                  0x0000000F0000000F, 0x0000000F0000000F,
+                                                  0x0000000F0000000F, 0x0000000F0000000F,
+                                                  0x0000000C00000008, 0x0000000400000000);
+-    return _mm512_permutevar_epi32 (k_dwordmask,comp_data_packed2);
++    return _mm512_permutexvar_epi32 (k_dwordmask,comp_data_packed2);
+ }
+ 
+ void mod_compression_256qam_avx512(int16_t *pData, int8_t *pOut, int16_t unit, int32_t nSc)
