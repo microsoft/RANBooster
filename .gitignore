@@ -1,0 +1,5 @@
+*.o
+das_dpdk
+dmimo_dpdk
+nhost_dpdk
+prb_mon_dpdk
