@@ -87,3 +87,6 @@ message(STATUS "Configured legacy build target 'fhi_lib_make' (Makefile at ${FHI
 
 ################ DAS with DPDK support ################
 add_subdirectory(${RANBOOSTER_SOURCE_CODE}/dpdk/das)
+
+################ DMIMO with DPDK support ################
+add_subdirectory(${RANBOOSTER_SOURCE_CODE}/dpdk/dmimo)

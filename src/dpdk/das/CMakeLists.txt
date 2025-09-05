@@ -5,9 +5,6 @@ project(RANBooster_das_dpdk)
 # Add the executable
 add_executable(das_dpdk das_dpdk.c)
 
-# DPDK via pkg-config (main CMakeLists.txt should already find_package(PkgConfig))
-#pkg_check_modules(DPDK REQUIRED libdpdk)
-
 # Add include directories
 target_include_directories(das_dpdk PRIVATE
   fhi_lib
