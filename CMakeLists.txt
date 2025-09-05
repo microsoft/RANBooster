@@ -93,3 +93,6 @@ add_subdirectory(${RANBOOSTER_SOURCE_CODE}/dpdk/dmimo)
 
 ################ PRB Monitor with DPDK support ################
 add_subdirectory(${RANBOOSTER_SOURCE_CODE}/dpdk/prb_mon)
+
+################ RU sharing with DPDK support ################
+add_subdirectory(${RANBOOSTER_SOURCE_CODE}/dpdk/ru_sharing)
