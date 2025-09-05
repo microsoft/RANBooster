@@ -90,3 +90,6 @@ add_subdirectory(${RANBOOSTER_SOURCE_CODE}/dpdk/das)
 
 ################ DMIMO with DPDK support ################
 add_subdirectory(${RANBOOSTER_SOURCE_CODE}/dpdk/dmimo)
+
+################ PRB Monitor with DPDK support ################
+add_subdirectory(${RANBOOSTER_SOURCE_CODE}/dpdk/prb_mon)
