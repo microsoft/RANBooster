@@ -168,12 +168,16 @@ index f430c12..b2bb8e7 100644
      uint32_t               loopBackTransactionIdentifier;   /* 21.7.3 A MEP copies the contents of the nextLBMtransID variable to this field. */
      uint8_t                end_tlv;
 diff --git a/fhi_lib/lib/api/xran_pkt_cp.h b/fhi_lib/lib/api/xran_pkt_cp.h
-index 0c690a1..20ca2f5 100644
+index 0c690a1..060ec89 100644
 --- a/fhi_lib/lib/api/xran_pkt_cp.h
 +++ b/fhi_lib/lib/api/xran_pkt_cp.h
-@@ -258,7 +258,7 @@ union xran_cp_radioapp_section_ext3_first {
+@@ -256,9 +256,11 @@ union xran_cp_radioapp_section_ext3_first {
+     }all_bits;
+ 
      struct{
++#ifndef __BPF_TARGET__
          __m128i     data_field1;
++#endif
      }data_field;
 -    } __attribute__((__packed__));
 +} __attribute__((__packed__));

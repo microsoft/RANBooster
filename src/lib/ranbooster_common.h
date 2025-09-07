@@ -5,7 +5,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include <immintrin.h>
+#ifndef __BPF_TARGET__
+#  include <immintrin.h>
+#endif
 
 #include "xran_pkt_up.h"
 #include "xran_pkt_cp.h"
