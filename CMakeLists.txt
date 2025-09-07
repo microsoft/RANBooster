@@ -102,3 +102,6 @@ add_subdirectory(${RANBOOSTER_SOURCE_CODE}/xdp/das)
 
 ################ DMIMO with XDP support ################
 add_subdirectory(${RANBOOSTER_SOURCE_CODE}/xdp/dmimo)
+
+################ PRB_MON with XDP support ################
+add_subdirectory(${RANBOOSTER_SOURCE_CODE}/xdp/prb_mon)
