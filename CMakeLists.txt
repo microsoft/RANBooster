@@ -96,3 +96,6 @@ add_subdirectory(${RANBOOSTER_SOURCE_CODE}/dpdk/prb_mon)
 
 ################ RU sharing with DPDK support ################
 add_subdirectory(${RANBOOSTER_SOURCE_CODE}/dpdk/ru_sharing)
+
+################ DAS with XDP support ################
+add_subdirectory(${RANBOOSTER_SOURCE_CODE}/xdp/das)
