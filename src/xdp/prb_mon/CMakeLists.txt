@@ -20,6 +20,7 @@ set(PRB_MON_PROG prb_mon)
 set(BPF_INCLUDES
   ${RANBOOSTER_HEADERS}
   /usr/include
+  /usr/include/x86_64-linux-gnu
   ${CMAKE_SOURCE_DIR}/3p/phy/fhi_lib/lib/api
 )
 

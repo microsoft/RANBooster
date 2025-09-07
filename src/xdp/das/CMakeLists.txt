@@ -20,6 +20,7 @@ set(RX_HANDLER_PROG das_rx_handler)
 set(BPF_INCLUDES
   ${RANBOOSTER_HEADERS}
   /usr/include
+  /usr/include/x86_64-linux-gnu
   ${CMAKE_SOURCE_DIR}/3p/phy/fhi_lib/lib/api
 )
 
