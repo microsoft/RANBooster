@@ -307,9 +307,9 @@ lcore_main(void *args)
 
                                     
 
-                                    struct compression_params *comp_params = (struct compression_params *)iq_samples_head;
+                                    union compression_params *comp_params = (union compression_params *)iq_samples_head;
 
-                                    if (comp_params->exponent > 0) {
+                                    if (comp_params->blockFlPoint.exponent > 0) {
                                         num_prbs_dl_used++;
                                     }
 
@@ -412,9 +412,9 @@ lcore_main(void *args)
 
                                 for (int rb_id = 0; rb_id < num_prbs; rb_id++) {
 
-                                    struct compression_params *comp_params = (struct compression_params *)iq_samples_head;
+                                    union compression_params *comp_params = (union compression_params *)iq_samples_head;
 
-                                    if (comp_params->exponent > 0) {
+                                    if (comp_params->blockFlPoint.exponent > 0) {
                                         num_prbs_ul_used++;
                                     }
 

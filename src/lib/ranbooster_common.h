@@ -5,6 +5,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include <immintrin.h>
+
 #include "xran_pkt_up.h"
 #include "xran_pkt_cp.h"
 

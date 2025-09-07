@@ -51,13 +51,15 @@ index d0c238c..e74ff80 100644
  CPP_FLAGS_FULL := $(CPP_FLAGS) $(CPP_COMP) $(INC) $(DEF)
  CPP_FLAGS_FULL_SNC := $(CPP_FLAGS) $(CPP_COMP_SNC) $(INC) $(DEF)
 diff --git a/fhi_lib/lib/api/xran_pkt.h b/fhi_lib/lib/api/xran_pkt.h
-index f430c12..eb62719 100644
+index f430c12..b2bb8e7 100644
 --- a/fhi_lib/lib/api/xran_pkt.h
 +++ b/fhi_lib/lib/api/xran_pkt.h
-@@ -38,10 +38,14 @@
+@@ -38,10 +38,16 @@
  extern "C" {
  #endif
  
++#include <linux/if_ether.h>
++
 +#ifdef DPDK_ENABLED
 +
  #include <rte_common.h>
@@ -69,7 +71,7 @@ index f430c12..eb62719 100644
  /**
   *****************************************************************************
   * @file xran_pkt.h
-@@ -154,7 +158,7 @@ union ecpri_seq_id
+@@ -154,7 +160,7 @@ union ecpri_seq_id
      {
          uint16_t data_num_1;
      } data;
@@ -78,7 +80,7 @@ index f430c12..eb62719 100644
  
  #define ecpri_seq_id_bitfield_seq_id          0
  #define ecpri_seq_id_bitfield_sub_seq_id      8
-@@ -182,7 +186,7 @@ union xran_ecpri_cmn_hdr
+@@ -182,7 +188,7 @@ union xran_ecpri_cmn_hdr
      {
          uint32_t    data_num_1;
      } data;
@@ -87,7 +89,7 @@ index f430c12..eb62719 100644
  
  #define xran_ecpri_cmn_hdr_bitfield_EcpriVer        4
  #define xran_ecpri_cmn_hdr_bitfield_EcpriMsgType    8
-@@ -227,9 +231,9 @@ struct xran_ecpri_delay_meas_pl
+@@ -227,9 +233,9 @@ struct xran_ecpri_delay_meas_pl
  struct xran_ecpri_hdr
  {
      union xran_ecpri_cmn_hdr cmnhdr;
@@ -99,7 +101,7 @@ index f430c12..eb62719 100644
  
  
  /**
-@@ -292,7 +296,7 @@ struct radio_app_common_hdr
+@@ -292,7 +298,7 @@ struct radio_app_common_hdr
         };
     }sf_slot_sym;
  
@@ -108,7 +110,7 @@ index f430c12..eb62719 100644
  
  /**
   ******************************************************************************
-@@ -322,7 +326,7 @@ struct compression_hdr
+@@ -322,7 +328,7 @@ struct compression_hdr
                                  e.g. udIQWidth = 0001b means I and Q are each 1 bit wide;
                                  e.g. udIqWidth = 1111b means I and Q are each 15 bits wide
                                  */
@@ -117,7 +119,7 @@ index f430c12..eb62719 100644
  
  /**
   ******************************************************************************
-@@ -334,9 +338,9 @@ struct compression_hdr
+@@ -334,9 +340,9 @@ struct compression_hdr
   *****************************************************************************/
  struct xran_pkt_comm_hdr
  {
@@ -129,7 +131,7 @@ index f430c12..eb62719 100644
  
  /**
  ******************************************************************************
-@@ -362,7 +366,7 @@ typedef enum xran_cfm_opcode_e {
+@@ -362,7 +368,7 @@ typedef enum xran_cfm_opcode_e {
  * IEEE 802.1Q - 21.4 Common CFM Header
  ******************************************************************************
  */
@@ -138,7 +140,7 @@ index f430c12..eb62719 100644
  {
      uint8_t version:5;          /* 21.4.2 - The protocol version number*/
      uint8_t md_level:3;         /* 21.4.1 - Integer identifying the Maintenance Domain Level (MD Level) of the packet */
-@@ -380,7 +384,7 @@ typedef struct __rte_packed xran_cfm_common_header_s
+@@ -380,7 +386,7 @@ typedef struct __rte_packed xran_cfm_common_header_s
  * Only mandatory fields i.e. upto chassis ID are supported
  ******************************************************************************
  */
@@ -147,7 +149,7 @@ index f430c12..eb62719 100644
  {
      uint8_t  type;              /* 21.5.1.1 Type field in the TLV format */
      uint16_t length;            /* 21.5.1.2 The 16 bits of the Length field indicate the size, in octets, of the Value field */
-@@ -403,7 +407,7 @@ typedef struct __rte_packed xran_sender_id_tlv_s
+@@ -403,7 +409,7 @@ typedef struct __rte_packed xran_sender_id_tlv_s
  * IEEE 802.1Q - Table 21-20—LBM and LBR formats
  ******************************************************************************
  */
@@ -156,7 +158,7 @@ index f430c12..eb62719 100644
      xran_cfm_common_header cfm_common_header;             /* See the definition of xran_cfm_common_header for sub-field field information */
      uint32_t               loopBackTransactionIdentifier; /* 21.7.3 A MEP copies the contents of the nextLBMtransID variable to this field. */
      xran_sender_id_tlv     tlv;                           /* See the definition of xran_sender_id_tlv for sub-field field information */
-@@ -417,7 +421,7 @@ typedef struct __rte_packed xran_lbm_header_s {
+@@ -417,7 +423,7 @@ typedef struct __rte_packed xran_lbm_header_s {
  * IEEE 802.1Q - Table 21-20—LBM and LBR formats
  ******************************************************************************
  */
@@ -166,21 +168,18 @@ index f430c12..eb62719 100644
      uint32_t               loopBackTransactionIdentifier;   /* 21.7.3 A MEP copies the contents of the nextLBMtransID variable to this field. */
      uint8_t                end_tlv;
 diff --git a/fhi_lib/lib/api/xran_pkt_cp.h b/fhi_lib/lib/api/xran_pkt_cp.h
-index 0c690a1..7d966e9 100644
+index 0c690a1..20ca2f5 100644
 --- a/fhi_lib/lib/api/xran_pkt_cp.h
 +++ b/fhi_lib/lib/api/xran_pkt_cp.h
-@@ -255,9 +255,11 @@ union xran_cp_radioapp_section_ext3_first {
-         uint64_t    reserved2:16;
-     }all_bits;
- 
-+#ifdef DPDK_ENABLED
+@@ -258,7 +258,7 @@ union xran_cp_radioapp_section_ext3_first {
      struct{
          __m128i     data_field1;
      }data_field;
-+#endif
-     } __attribute__((__packed__));
+-    } __attribute__((__packed__));
++} __attribute__((__packed__));
  
  #define xran_cp_radioapp_sec_ext3_Res1           0
+ #define xran_cp_radioapp_sec_ext3_CrcSymNum      8
 diff --git a/fhi_lib/lib/api/xran_pkt_up.h b/fhi_lib/lib/api/xran_pkt_up.h
 index 674b584..05240ad 100644
 --- a/fhi_lib/lib/api/xran_pkt_up.h
