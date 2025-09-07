@@ -1,20 +1,18 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(RANBooster_xdp_das)
+project(RANBooster_xdp_dmimo)
 
 # eBPF sources and objects
-set(BPF_EGRESS_SRC das_egress.c)
-set(BPF_INGRESS_SRC das_ingress.c)
-set(BPF_EGRESS_OBJ das_egress.o)
-set(BPF_INGRESS_OBJ das_ingress.o)
+set(BPF_EGRESS_SRC dmimo_egress.c)
+set(BPF_INGRESS_SRC dmimo_ingress.c)
+set(BPF_EGRESS_OBJ dmimo_egress.o)
+set(BPF_INGRESS_OBJ dmimo_ingress.o)
 
 # User-space sources
-set(USER_SRC das_load.c)
-set(RX_HANDLER_SRC das_rx_handler.c)
+set(USER_SRC dmimo_load.c)
 
 # Output binaries
-set(USER_PROG das_load)
-set(RX_HANDLER_PROG das_rx_handler)
+set(USER_PROG dmimo_load)
 
 # eBPF include directories
 set(BPF_INCLUDES
@@ -31,7 +29,7 @@ foreach(inc ${BPF_INCLUDES})
   list(APPEND BPF_INCLUDE_FLAGS -I${inc})
 endforeach()
 
-set(BPF_OUTPUT_DIR ${CMAKE_BINARY_DIR}/das_xdp)
+set(BPF_OUTPUT_DIR ${CMAKE_BINARY_DIR}/dmimo_xdp)
 
 set(BPF_CFLAGS -O2 -g -Wall -target bpf -D__x86_64__ -D__BPF_TARGET__)
 
@@ -53,27 +51,23 @@ add_custom_command(
   COMMENT "Building eBPF object ${BPF_INGRESS_OBJ} with clang"
 )
 
-add_custom_target(das_ebpf_objs ALL DEPENDS
+add_custom_target(dmimo_ebpf_objs ALL DEPENDS
   ${BPF_OUTPUT_DIR}/${BPF_EGRESS_OBJ}
   ${BPF_OUTPUT_DIR}/${BPF_INGRESS_OBJ}
 )
 
 # User-space programs (built with gcc, default CMake compiler)
 add_executable(${USER_PROG} ${USER_SRC})
-add_executable(${RX_HANDLER_PROG} ${RX_HANDLER_SRC})
 
 target_include_directories(${USER_PROG} PRIVATE ${RANBOOSTER_HEADERS})
-target_include_directories(${RX_HANDLER_PROG} PRIVATE ${RANBOOSTER_HEADERS})
 
 # Link libraries for user-space programs
 target_link_libraries(${USER_PROG} PRIVATE fhi_lib bpf elf)
-target_link_libraries(${RX_HANDLER_PROG} PRIVATE fhi_lib bpf elf xdp)
 
 # Set output directory
-set_target_properties(${USER_PROG} ${RX_HANDLER_PROG} PROPERTIES
-  RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/das_xdp
+set_target_properties(${USER_PROG} PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/dmimo_xdp
 )
 
 # Ensure user-space programs depend on eBPF objects
-add_dependencies(${USER_PROG} das_ebpf_objs)
-add_dependencies(${RX_HANDLER_PROG} das_ebpf_objs)
+add_dependencies(${USER_PROG} dmimo_ebpf_objs)
