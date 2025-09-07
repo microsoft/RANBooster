@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT License
+ */
+
 #ifndef RANBOOSTER_COMMON_H_
 #define RANBOOSTER_COMMON_H_
 

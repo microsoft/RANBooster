@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT License
+ */
+
 #define _GNU_SOURCE
 #include <sched.h>
 #include <stdio.h>

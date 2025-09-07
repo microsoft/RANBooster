@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT License
+ */
+
 #include "ranbooster_common.h"
 
 #include <rte_common.h>

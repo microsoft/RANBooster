@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT License
+ */
+
 #include <rte_common.h>
 #include <rte_ethdev.h>
 #include <rte_mbuf.h>
