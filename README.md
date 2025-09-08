@@ -11,13 +11,48 @@ The repository currently provides the following implementations:
 
 # Build instructions
 
-The simplest way to build the middleboxes is in the form of a container image, using the provided Dockerfile from the project's root:
+Here we present instructions for building the middleboxes in Ubuntu 24.04.
+The guide uses the variable `$RANBOOSTER_SRC_PATH` to refer to the root directory of the repo.
+
+*Note:* The guide assumes the use of a Mellanox ConnectX-6 Dx NIC. For a different NIC, you might need to adjust the dependencies accordingly.
+
+First, we install the system dependencies:
 
 ```bash
-docker build -f deploy/ubuntu24_04.Dockerfile -t ranbooster .
+sudo apt install -y wget cmake clang gcc g++ git libnuma-dev python3-pyelftools \
+            meson ninja-build pkg-config libbpf-dev libelf-dev iproute2 \
+            linux-tools-common linux-tools-generic libxdp-dev libibverbs-dev \
+            ibverbs-providers libibverbs1 rdma-core
 ```
 
-To build manually, you can use the [provided Dockerfile](./deploy/ubuntu24_04.Dockerfile) as a documentation of the project's dependencies and build instructions. 
+Next, we build DPDK. The code has been tested with DPDK 24.11.3 LTS:
+
+```bash
+mkdir -p $RANBOOSTER_SRC_PATH/dpdk-ranbooster
+wget -O - https://fast.dpdk.org/rel/dpdk-24.11.3.tar.xz | tar -xJ -C $RANBOOSTER_SRC_PATH/dpdk-ranbooster --strip-components=1
+cd $RANBOOSTER_SRC_PATH/dpdk-ranbooster
+meson build
+cd build && ninja
+```
+
+We then prepare the code, setup the environment and build the code:
+```bash
+cd $RANBOOSTER_SRC_PATH
+source setup_ranbooster_env.sh
+./init_and_patch_submodules.sh
+export RTE_SDK=$RANBOOSTER_SRC_PATH/dpdk-ranbooster
+export PKG_CONFIG_PATH=$RANBOOSTER_SRC_PATH/dpdk-ranbooster/build/meson-uninstalled
+mkdir build
+cd build
+cmake -DCMAKE_BUILD_TYPE=Release .. && make -j
+```
+
+# Supported Hardware
+
+The middleboxes assume support for SIMD instructions and have been tested with the following hardware:
+
+* CPU: Intel Xeon Gold 6338N
+* NIC: Mellanox ConnectX-6 Dx
 
 # Tested RAN components
 
@@ -27,12 +62,6 @@ The middleboxes have been verified with the following RAN stacks and O-RAN RUs:
 * CapGemini DU
 * Radisys DU
 * Foxconn RPQN 7800 O-RU
-
-# Supported NICs
-
-The middleboxes have been tested with the following NICs:
-
-* Mellanox ConnectX-6 Dx
 
 # Additional documentation
 
