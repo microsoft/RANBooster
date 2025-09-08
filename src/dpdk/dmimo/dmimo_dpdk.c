@@ -266,7 +266,7 @@ lcore_main(void *args)
                         uint16_t subframe = radio_hdr_cpy.sf_slot_sym.subframe_id;
                         uint16_t symbol = radio_hdr_cpy.sf_slot_sym.symb_id;
 
-                        if (slot == 0 && subframe == 0 && (symbol >=2 && symbol <  6)) {
+                        if (slot == SSB_SLOT && subframe == SSB_SUBFRAME && (symbol >= SSB_SYMBOL_START && symbol < SSB_SYMBOL_END)) {
                             if (ru_port_id == 0) {
                                 memcpy(payload, rte_pktmbuf_mtod_offset(buf, uint8_t *, IQ_OFFSET + (12 * (((9 * 2 * 12) / 8) + 1))), 20 * (((9 * 2 * 12) / 8) + 1));
                             } else {

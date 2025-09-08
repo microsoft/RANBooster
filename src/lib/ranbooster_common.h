@@ -24,6 +24,11 @@
 #define NUM_PRB (273)
 #define MAX_PDSCH_PUSCH_PORT (4)
 
+#define SSB_SLOT (0)
+#define SSB_SUBFRAME (0)
+#define SSB_SYMBOL_START (2)
+#define SSB_SYMBOL_END (6)
+
 #define NUM_SYMBOLS (14)
 #define NUM_SUBFRAMES (10)
 #define NUM_SLOTS (2)
