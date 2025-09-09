@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# ARGS: Middlebox port, DU MAC, DU VLAN, RU1_DU port, RU1 vlan, RU1 MAC, RU2_DU port RU2 vlan, RU2 MAC, RU3 vlan, RU3 MAC
+# Non-DPDK ARGS: Middlebox PCI port, DU MAC, DU VLAN, RU1 port, RU1 vlan, RU1 MAC, RU2 port, RU2 vlan, RU2 MAC, RU3 port, RU3 vlan, RU3 MAC, RU4 port, RU4 vlan, RU4 MAC
 $RANBOOSTER_PATH/build/das_dpdk/das_dpdk -l $1 \
     -a 0000:4b:00.1 \
     -a 0000:4b:00.2 \
