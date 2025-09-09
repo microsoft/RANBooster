@@ -1,6 +1,5 @@
 This example configures and runs the middlebox deployment shown in the figure below:
 
-
 The scripts have to be modified to match the interface names, MAC addresses and VLANs of your deployment. Also, please make sure to source `setup_runbooster_env.sh` before running the scripts.
 
 To setup the NIC, you need to run:
