@@ -6,7 +6,7 @@
 # If bit N is 1 (from right to left), then DU port N should be mapped to the next unassigned RU port on the DL, and vice versa on the UL.
 # For example, if the bitmap is 136 (binary 10001000), then DU port 3 is mapped to RU port 0, and DU port 7 is mapped to RU port 1 on the DL.
 # Similarly, on the UL, RU port 0 is mapped to DU port 3, and RU port 1 is mapped to DU port 7.
-$RANBOOSTER_PATH/build/dmimo_dpdk/dmimo_dpdk -l1 \
+$RANBOOSTER_PATH/build/dmimo_dpdk/dmimo_dpdk -l $1 \
                 -a 0000:4b:00.1 \
                 -a 0000:4b:00.2 \
                 -a 0000:4b:00.3 \
