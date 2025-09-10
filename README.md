@@ -47,6 +47,17 @@ cd build
 cmake -DCMAKE_BUILD_TYPE=Release .. && make -j
 ```
 
+# Running the middleboxes
+
+To run the middleboxes, you can check the documentation and scripts provided in the following directories:
+
+- [DPDK DAS middlebox](./config/dpdk/das/)
+- [DPDK Distributed MIMO middlebox](./config/dpdk/dmimo/)
+- [DPDK RU sharing middlebox](./config/dpdk/ru_sharing)
+- [DPDK PRB monitoring middlebox](./config/dpdk/prb_mon/)
+
+**TODO:** Add documentation for XDP middleboxes.
+
 # Supported Hardware
 
 The middleboxes assume support for SIMD instructions and have been tested with the following hardware:
