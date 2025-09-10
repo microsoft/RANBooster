@@ -1,5 +1,7 @@
 This example configures and runs the middlebox deployment shown in the figure below:
 
+![Distributed MIMO middlebox topology](./dmimo_middlebox_example.png)
+
 The example enables 4x4 distributed MIMO, by using 4 RUs. It assumes that each RU has been configured to only have a single physical antenna active.
 
 The scripts have to be modified to match the interface names, MAC addresses and VLANs of your deployment. Also, please make sure to source `setup_runbooster_env.sh` before running the scripts.
