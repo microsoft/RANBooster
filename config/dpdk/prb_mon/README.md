@@ -1,5 +1,7 @@
 This example configures and runs the middlebox deployment shown in the figure below:
 
+![PRB monitoring middlebox topology](./prb_mon_middlebox_example.png)
+
 The scripts have to be modified to match the interface names, MAC addresses and VLANs of your deployment. Also, please make sure to source `setup_runbooster_env.sh` before running the scripts.
 
 To setup the NIC, you need to run:
