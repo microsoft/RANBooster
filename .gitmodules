@@ -1,0 +1,3 @@
+[submodule "3p/phy"]
+	path = 3p/phy
+	url = https://gerrit.o-ran-sc.org/r/o-du/phy.git
